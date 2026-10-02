@@ -16,9 +16,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *   Token: el valor de GREEN_API_WEBHOOK_TOKEN
  */
 export async function POST(request: Request) {
-  const expected = process.env.GREEN_API_WEBHOOK_TOKEN;
-  if (expected && request.headers.get("authorization") !== `Bearer ${expected}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const expected = process.env.GREEN_API_WEBHOOK_TOKEN?.trim();
+  if (expected) {
+    // Green API manda el token en Authorization, con o sin el prefijo "Bearer"
+    const received = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    if (received !== expected) {
+      console.warn("[green-api webhook] token inválido o ausente");
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
   }
 
   let payload: GreenWebhook;
