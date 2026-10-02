@@ -4,7 +4,8 @@ import { z } from "zod";
 import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
 import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT } from "./prompt";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendText } from "@/lib/whatsapp/green-api";
+import { sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
+import { PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
 import { isValidCurp, isValidNss } from "@/lib/utils";
 import { TRAMITE_TYPES } from "@/lib/constants";
 import type { AgentSettings, DocumentRow, Lead, LeadStatus, Message, Tramite } from "@/lib/types";
@@ -13,6 +14,7 @@ type Db = ReturnType<typeof createAdminClient>;
 
 const MAX_TOOL_ROUNDS = 6;
 const LOCK_SECONDS = 120;
+const SLIP_URL_SECONDS = 7 * 24 * 3600; // el enlace del PDF debe durar lo suficiente para que Green API lo descargue
 
 // =============================================================
 // Herramientas del agente
@@ -81,6 +83,13 @@ const tools: Anthropic.Beta.BetaTool[] = [
       properties: { reason: { type: "string", description: "Motivo para el asesor" } },
       required: ["reason"],
     },
+  },
+  {
+    name: "generar_ficha_pago",
+    description:
+      `Genera la ficha de pago en PDF de los honorarios del Alta en IMSS (${formatMxn(PAYMENT.amount)} MXN) y la envía por WhatsApp al prospecto. ` +
+      "Úsala solo cuando ya confirmó sus datos (nombre completo y CURP) y aceptó recibir la ficha. Después de usarla, en tu respuesta solo explica brevemente cómo pagar y que te envíe el comprobante; no repitas toda la ficha.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "consultar_expediente",
@@ -159,6 +168,62 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
       return "Listo: se notificó a un asesor y el asistente queda en pausa para este contacto. Despídete amablemente.";
     }
 
+    case "generar_ficha_pago": {
+      if (!lead.full_name || !lead.curp) {
+        return "No se generó la ficha: faltan el nombre completo o la CURP. Pídelos y guárdalos primero.";
+      }
+      if (!lead.wa_chat_id) return "No se generó la ficha: el prospecto no tiene chat de WhatsApp vinculado.";
+      if (lead.captured_data?.pago_estado === "comprobante_valido") {
+        return "No se generó la ficha: este prospecto ya tiene un comprobante de pago válido.";
+      }
+
+      const slip = buildSlip(lead);
+      const pdf = await renderPaymentSlipPdf(lead, slip);
+      const fileName = `Ficha-de-pago-${lead.folio}.pdf`;
+      const path = `${lead.id}/ficha-pago-${slip.issuedAt.getTime()}.pdf`;
+      const { error: upErr } = await db.storage.from("media").upload(path, pdf, { contentType: "application/pdf", upsert: true });
+      if (upErr) return `Error al guardar la ficha: ${upErr.message}`;
+      const { data: signed, error: signErr } = await db.storage.from("media").createSignedUrl(path, SLIP_URL_SECONDS);
+      if (signErr || !signed) return `Error al generar el enlace de la ficha: ${signErr?.message ?? "sin URL"}`;
+
+      const idMessage = await sendFileByUrl(lead.wa_chat_id, signed.signedUrl, fileName);
+      await db.from("messages").insert({
+        lead_id: lead.id,
+        direction: "out",
+        sender: "ai",
+        type: "document",
+        body: `Ficha de pago ${lead.folio} (${formatMxn(slip.amount)})`,
+        media_path: path,
+        media_mime: "application/pdf",
+        wa_message_id: idMessage,
+        status: "sent",
+        meta: { fileName, kind: "ficha_pago" },
+      });
+
+      const pago = {
+        pago_estado: "ficha_enviada",
+        pago_ficha_fecha: cdmxDate(slip.issuedAt),
+        pago_ficha_vence: slip.expiresAt.toISOString(),
+        pago_monto_esperado: String(slip.amount),
+        pago_referencia: slip.reference,
+      };
+      const captured = { ...lead.captured_data, ...pago };
+      await db.from("leads").update({ captured_data: captured }).eq("id", lead.id);
+      lead.captured_data = captured;
+      await db.from("activities").insert({
+        lead_id: lead.id,
+        kind: "ai",
+        content: `IA envió ficha de pago ${slip.reference} por ${formatMxn(slip.amount)}${isPaymentConfigFictitious() ? " (cuenta FICTICIA de prueba)" : ""}`,
+        meta: pago,
+      });
+      return [
+        "Ficha de pago enviada por WhatsApp como PDF.",
+        `Monto: ${formatMxn(slip.amount)}. Referencia: ${slip.reference}. Vigencia: ${PAYMENT.validHours} horas.`,
+        `Banco: ${PAYMENT.bank}. Beneficiario: ${PAYMENT.beneficiary}. CLABE: ${PAYMENT.clabe}.`,
+        "pago_estado quedó como ficha_enviada.",
+      ].join(" ");
+    }
+
     case "consultar_expediente": {
       const [{ data: tramites }, { data: docs }] = await Promise.all([
         db.from("tramites").select("*").eq("lead_id", lead.id).order("created_at"),
@@ -187,6 +252,7 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
 // =============================================================
 
 function messageToText(m: Message, docsByMessage: Map<string, DocumentRow>): string {
+  if (m.direction === "out" && m.type === "document") return `[Archivo enviado al usuario] ${m.body ?? (m.meta?.fileName as string) ?? ""}`;
   if (m.sender === "agent") return `[Asesor] ${m.body ?? ""}`;
   switch (m.type) {
     case "audio":
@@ -395,13 +461,14 @@ export async function replyToLead(leadId: string) {
       const { data: fresh } = await db.from("leads").select("ai_enabled").eq("id", leadId).single();
       const { data: lastMsg } = await db
         .from("messages")
-        .select("direction")
+        .select("direction, sender")
         .eq("lead_id", leadId)
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
       if (!fresh?.ai_enabled && lead.ai_enabled) return;
-      if (lastMsg?.direction === "out") return;
+      // Archivos que envió la propia IA en esta respuesta (p. ej. la ficha de pago) no cuentan como respuesta de un asesor
+      if (lastMsg?.direction === "out" && lastMsg.sender !== "ai") return;
 
       const idMessage = await sendText(lead.wa_chat_id, reply);
       const now = new Date().toISOString();

@@ -40,10 +40,12 @@ export const DOC_TYPES: Record<string, string> = {
   estado_cuenta: "Estado de cuenta",
   constancia_semanas: "Constancia de semanas cotizadas",
   rfc: "Constancia de situación fiscal",
+  comprobante_pago: "Comprobante de pago",
   otro: "Otro",
 };
 
 export const TRAMITE_TYPES = [
+  "Alta en IMSS",
   "Pensión por cesantía / vejez",
   "Modalidad 40",
   "Modalidad 10",

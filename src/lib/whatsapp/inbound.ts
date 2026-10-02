@@ -4,7 +4,8 @@ import { downloadMedia, getDownloadUrl, type GreenWebhook } from "./green-api";
 import { transcribeAudio } from "@/lib/ai/transcribe";
 import { evaluateDocument, extractDocument, isOcrSupported, ocrSummaryForAgent } from "@/lib/ai/ocr";
 import { phoneFromChatId } from "@/lib/utils";
-import type { Lead, Message, MessageType } from "@/lib/types";
+import type { DocumentStatus, Lead, Message, MessageType } from "@/lib/types";
+import type { OcrResult } from "@/lib/ai/ocr";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -219,7 +220,16 @@ export async function processMedia(messageId: string) {
           .eq("id", doc!.id);
       } else {
         const ocr = await extractDocument(buffer, mime);
-        const { status, issues } = evaluateDocument(ocr, lead);
+        let { status, issues } = evaluateDocument(ocr, lead);
+
+        // Comprobante de pago: no aceptar el mismo comprobante dos veces (de este u otro prospecto)
+        if (ocr.tipo_documento === "comprobante_pago") {
+          const dup = await findDuplicateReceipt(db, doc!.id, ocr.pago?.clave_rastreo, ocr.pago?.folio_operacion);
+          if (dup) {
+            issues = [`Este comprobante ya se había recibido antes (${dup})`, ...issues];
+            if (status === "valido") status = "con_observaciones";
+          }
+        }
         await db
           .from("documents")
           .update({
@@ -231,8 +241,10 @@ export async function processMedia(messageId: string) {
           })
           .eq("id", doc!.id);
 
-        // Completa datos vacíos del lead con lo leído en documentos válidos
-        if (status !== "invalido") {
+        if (ocr.tipo_documento === "comprobante_pago") {
+          await recordPaymentReceipt(db, lead, ocr, status, issues);
+        } else if (status !== "invalido") {
+          // Completa datos vacíos del lead con lo leído en documentos válidos
           const fill: Partial<Lead> = {};
           if (!lead.full_name && ocr.nombre_completo) fill.full_name = ocr.nombre_completo;
           if (!lead.curp && ocr.curp) fill.curp = ocr.curp.toUpperCase();
@@ -258,4 +270,61 @@ export async function processMedia(messageId: string) {
     await db.from("documents").update({ status: "error", issues: [(e as Error).message] }).eq("message_id", msg.id).eq("status", "procesando");
   }
   await db.from("messages").update({ meta }).eq("id", msg.id);
+}
+
+/** Busca otro comprobante con la misma clave de rastreo o folio. Devuelve el folio del prospecto que lo envió. */
+async function findDuplicateReceipt(db: Db, docId: string, claveRastreo?: string | null, folioOperacion?: string | null) {
+  for (const [field, value] of [
+    ["clave_rastreo", claveRastreo],
+    ["folio_operacion", folioOperacion],
+  ] as const) {
+    if (!value?.trim()) continue;
+    const { data } = await db
+      .from("documents")
+      .select("id, leads(folio)")
+      .eq("doc_type", "comprobante_pago")
+      .eq(`extracted->pago->>${field}`, value.trim())
+      .neq("id", docId)
+      .limit(1);
+    const hit = data?.[0] as { leads: { folio: string } | null } | undefined;
+    if (hit) return `prospecto ${hit.leads?.folio ?? "desconocido"}`;
+  }
+  return null;
+}
+
+/** Deja el estado del pago en captured_data para el agente y los asesores. */
+async function recordPaymentReceipt(db: Db, lead: Lead, ocr: OcrResult, status: DocumentStatus, issues: string[]) {
+  const p = ocr.pago;
+  const pagoEstado = status === "valido" ? "comprobante_valido" : "comprobante_en_revision";
+  const update: Record<string, string> = { pago_estado: pagoEstado };
+  if (p?.monto != null) update.pago_monto = String(p.monto);
+  if (p?.fecha_operacion) update.pago_fecha = p.fecha_operacion;
+  if (p?.banco_emisor) update.pago_banco = p.banco_emisor;
+  if (p?.clave_rastreo || p?.folio_operacion) update.pago_rastreo = (p.clave_rastreo ?? p.folio_operacion)!;
+  if (issues.length) update.pago_observaciones = issues.join(" | ");
+  else update.pago_observaciones = "";
+
+  // Un comprobante dudoso posterior no debe borrar uno ya válido
+  if (lead.captured_data?.pago_estado === "comprobante_valido" && pagoEstado !== "comprobante_valido") {
+    await db.from("activities").insert({
+      lead_id: lead.id,
+      kind: "document",
+      content: `Se recibió otro comprobante de pago con observaciones (ya había uno válido): ${issues.join("; ")}`,
+    });
+    return;
+  }
+
+  await db
+    .from("leads")
+    .update({ captured_data: { ...lead.captured_data, ...update } })
+    .eq("id", lead.id);
+  await db.from("activities").insert({
+    lead_id: lead.id,
+    kind: "document",
+    content:
+      pagoEstado === "comprobante_valido"
+        ? `Comprobante de pago prevalidado por IA (${update.pago_monto ?? "?"} MXN, ${update.pago_rastreo ?? "sin rastreo"}). Falta conciliar contra el banco.`
+        : `Comprobante de pago con observaciones: ${issues.join("; ")}`,
+    meta: update,
+  });
 }
