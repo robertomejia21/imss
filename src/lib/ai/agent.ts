@@ -4,7 +4,7 @@ import { z } from "zod";
 import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
 import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT } from "./prompt";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
+import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
 import { PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
 import { isValidCurp, isValidNss } from "@/lib/utils";
 import { TRAMITE_TYPES } from "@/lib/constants";
@@ -453,7 +453,14 @@ export async function replyToLead(leadId: string) {
         .single();
       answeredUpTo = lastIn?.created_at;
 
-      const reply = await generateReply(db, lead, settings);
+      // Mostrar "escribiendo…" en WhatsApp mientras la IA prepara la respuesta
+      const stopTyping = keepTyping(lead.wa_chat_id);
+      let reply: string | null;
+      try {
+        reply = await generateReply(db, lead, settings);
+      } finally {
+        stopTyping();
+      }
       if (!reply) return;
 
       // Si mientras pensaba un asesor desactivó la IA o respondió, no enviamos

@@ -38,6 +38,38 @@ export async function sendFileByUrl(chatId: string, urlFile: string, fileName: s
   return r.idMessage;
 }
 
+/** Muestra "escribiendo…" en el chat durante `ms` milisegundos (Green API acepta 1000 a 20000). */
+export async function sendTyping(chatId: string, ms = 5000) {
+  const typingTime = Math.min(20000, Math.max(1000, Math.round(ms)));
+  const url = `${apiUrl()}/waInstance${idInstance()}/sendTyping/${token()}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, typingTime }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Green API sendTyping → ${res.status}`);
+}
+
+/**
+ * Mantiene el indicador "escribiendo…" mientras dure una tarea larga (p. ej. la IA pensando).
+ * Devuelve una función para detenerlo. Los errores se ignoran: es solo cosmético.
+ */
+export function keepTyping(chatId: string, everyMs = 4500) {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = () => {
+    if (stopped) return;
+    sendTyping(chatId, everyMs + 1000).catch(() => {});
+    timer = setTimeout(tick, everyMs);
+  };
+  tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}
+
 export async function getStateInstance() {
   return call<{ stateInstance: string }>("getStateInstance");
 }
