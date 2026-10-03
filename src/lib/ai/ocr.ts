@@ -14,6 +14,7 @@ const DocTypeEnum = z.enum([
   "comprobante_domicilio",
   "acta_nacimiento",
   "estado_cuenta",
+  "foto_persona",
   "constancia_semanas",
   "rfc",
   "comprobante_pago",
@@ -32,6 +33,13 @@ const PagoSchema = z.object({
   concepto: z.string().nullable().describe("Concepto o motivo del pago"),
   referencia: z.string().nullable().describe("Referencia escrita por el cliente"),
   ordenante: z.string().nullable().describe("Nombre de quien pagó"),
+});
+
+const FotoSchema = z.object({
+  rostro_visible: z.boolean().describe("¿Se ve el rostro completo, de frente, sin lentes oscuros, gorra ni cubrebocas?"),
+  una_sola_persona: z.boolean().describe("¿Aparece una sola persona?"),
+  fondo_claro_despejado: z.boolean().describe("¿El fondo es claro y despejado (pared lisa, sin objetos ni otras personas)?"),
+  buena_iluminacion: z.boolean().describe("¿La foto tiene buena luz y está enfocada?"),
 });
 
 export const OcrSchema = z.object({
@@ -54,6 +62,7 @@ export const OcrSchema = z.object({
   fecha_emision: z.string().nullable().describe("Formato YYYY-MM-DD si se conoce"),
   vigencia: z.string().nullable().describe("Año o fecha de vigencia tal como aparece"),
   pago: PagoSchema.nullable().describe("Solo para comprobantes de pago o transferencia; null en cualquier otro documento"),
+  foto: FotoSchema.nullable().describe("Solo para foto_persona (foto de una persona, no de un documento); null en cualquier otro caso"),
   otros_datos: z.array(z.object({ campo: z.string(), valor: z.string() })),
   observaciones: z.array(z.string()).describe("Problemas detectados, en español, dirigidos al asesor"),
   confianza: z.number().describe("0 a 1: confianza general de la extracción"),
@@ -67,6 +76,8 @@ Analiza el documento adjunto y extrae sus datos con precisión, carácter por ca
 - Si un dato no aparece o no se puede leer, usa null. Nunca inventes datos.
 - Para INE/credencial, indica si la foto muestra el frente, el reverso o ambos, y la vigencia.
 - Si es un comprobante de pago, transferencia (SPEI), depósito o ticket bancario: tipo_documento = "comprobante_pago", llena "pago" con monto, fecha, cuentas, clave de rastreo, concepto y ordenante, y deja nombre_completo, curp y nss en null. Revisa con cuidado señales de edición (tipografías distintas, cifras desalineadas, recortes).
+- Si es la foto de una persona (selfie o retrato, no un documento ni una INE): tipo_documento = "foto_persona", llena "foto" y deja los datos personales en null. es_documento_oficial = true si es una foto real de la persona (no captura de pantalla, foto de otra foto ni imagen de internet).
+- Si es un estado de cuenta bancario: tipo_documento = "estado_cuenta"; en nombre_completo pon el titular y en otros_datos el banco y la CLABE o número de cuenta tal como aparecen.
 - En "observaciones" anota problemas útiles para el asesor: foto borrosa, reflejos, documento vencido, recortado, datos ilegibles, posibles alteraciones, etc.`;
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -102,6 +113,7 @@ export function evaluateDocument(
   lead: { folio: string; full_name: string | null; curp: string | null; nss: string | null; captured_data: Record<string, unknown> },
 ): { status: DocumentStatus; issues: string[] } {
   if (ocr.tipo_documento === "comprobante_pago") return evaluateReceipt(ocr, lead);
+  if (ocr.tipo_documento === "foto_persona") return evaluatePhoto(ocr);
   const issues = [...ocr.observaciones];
 
   if (!ocr.legible) issues.push("El documento no es legible");
@@ -153,6 +165,26 @@ function evaluateReceipt(
       ? "con_observaciones"
       : "valido";
   return { status, issues };
+}
+
+/** Foto de la persona (retiro por desempleo): rostro visible, una persona, fondo claro y despejado. */
+function evaluatePhoto(ocr: OcrResult): { status: DocumentStatus; issues: string[] } {
+  const f = ocr.foto;
+  const issues = [...ocr.observaciones];
+  if (!f) issues.push("No se pudo evaluar la foto");
+  else {
+    if (!f.rostro_visible) issues.push("El rostro no se ve completo o de frente");
+    if (!f.una_sola_persona) issues.push("Aparece más de una persona");
+    if (!f.fondo_claro_despejado) issues.push("El fondo no es claro y despejado");
+    if (!f.buena_iluminacion) issues.push("La foto está oscura o desenfocada");
+  }
+  if (ocr.posible_alteracion || !ocr.es_documento_oficial) issues.push("No parece una foto real de la persona");
+  const status: DocumentStatus = !f || !f.rostro_visible || !ocr.es_documento_oficial
+    ? "invalido"
+    : issues.length > 0
+      ? "con_observaciones"
+      : "valido";
+  return { status, issues: [...new Set(issues)] };
 }
 
 const normalize = (s: string) =>
@@ -211,6 +243,7 @@ export function ocrSummaryForAgent(ocr: OcrResult, status: DocumentStatus, issue
     ["Fecha de nacimiento", ocr.fecha_nacimiento],
     ["Domicilio", ocr.domicilio],
     ["Vigencia", ocr.vigencia],
+    ...ocr.otros_datos.map((d) => [d.campo, d.valor]),
   ]
     .filter(([, v]) => v)
     .map(([k, v]) => `${k}: ${v}`)

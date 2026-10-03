@@ -38,6 +38,7 @@ export const DOC_TYPES: Record<string, string> = {
   comprobante_domicilio: "Comprobante de domicilio",
   acta_nacimiento: "Acta de nacimiento",
   estado_cuenta: "Estado de cuenta",
+  foto_persona: "Foto de la persona",
   constancia_semanas: "Constancia de semanas cotizadas",
   rfc: "Constancia de situación fiscal",
   comprobante_pago: "Comprobante de pago",
