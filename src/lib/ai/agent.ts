@@ -5,7 +5,7 @@ import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
 import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT } from "./prompt";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
-import { PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
+import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
 import { isValidCurp, isValidNss } from "@/lib/utils";
 import { TRAMITE_TYPES } from "@/lib/constants";
 import type { AgentSettings, DocumentRow, Lead, LeadStatus, Message, Tramite } from "@/lib/types";
@@ -37,6 +37,11 @@ const SetStatusInput = z.object({
 });
 
 const HumanInput = z.object({ reason: z.string() });
+const SlipInput = z.object({
+  plan: z.enum(["medico", "pension"]),
+  infonavit: z.boolean().optional(),
+  afore: z.boolean().optional(),
+});
 
 const tools: Anthropic.Beta.BetaTool[] = [
   {
@@ -87,9 +92,23 @@ const tools: Anthropic.Beta.BetaTool[] = [
   {
     name: "generar_ficha_pago",
     description:
-      `Genera la ficha de pago en PDF de los honorarios del Alta en IMSS (${formatMxn(PAYMENT.amount)} MXN) y la envía por WhatsApp al prospecto. ` +
-      "Úsala solo cuando ya confirmó sus datos (nombre completo y CURP) y aceptó recibir la ficha. Después de usarla, en tu respuesta solo explica brevemente cómo pagar y que te envíe el comprobante; no repitas toda la ficha.",
-    input_schema: { type: "object", properties: {} },
+      "Genera la ficha de pago en PDF del Alta en IMSS según el paquete que eligió el prospecto y la envía por WhatsApp. " +
+      `Precios: plan "medico" ${formatMxn(ALTA_PRICES.medico)}; plan "pension" ${formatMxn(ALTA_PRICES.pension)}, ` +
+      `+ Infonavit ${formatMxn(ALTA_PRICES.infonavit)} y/o + AFORE ${formatMxn(ALTA_PRICES.afore)} (extras solo con el plan "pension"). ` +
+      "Úsala solo cuando ya confirmó sus datos (nombre completo y CURP), eligió su paquete y aceptó recibir la ficha. Después de usarla, en tu respuesta solo explica brevemente cómo pagar y que te envíe el comprobante; no repitas toda la ficha.",
+    input_schema: {
+      type: "object",
+      properties: {
+        plan: {
+          type: "string",
+          enum: ["medico", "pension"],
+          description: '"medico" = solo servicio médico; "pension" = servicio médico y semanas de pensión (RSV)',
+        },
+        infonavit: { type: "boolean", description: 'Agregar Infonavit (solo con plan "pension")' },
+        afore: { type: "boolean", description: 'Agregar AFORE (solo con plan "pension")' },
+      },
+      required: ["plan"],
+    },
   },
   {
     name: "consultar_expediente",
@@ -177,7 +196,14 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
         return "No se generó la ficha: este prospecto ya tiene un comprobante de pago válido.";
       }
 
-      const slip = buildSlip(lead);
+      const parsed = SlipInput.safeParse(input);
+      if (!parsed.success) return `No se generó la ficha: paquete inválido (${parsed.error.message}).`;
+      const pkg = { plan: parsed.data.plan, infonavit: !!parsed.data.infonavit, afore: !!parsed.data.afore };
+      if (pkg.plan === "medico" && (pkg.infonavit || pkg.afore)) {
+        return 'No se generó la ficha: Infonavit y AFORE solo se pueden agregar al plan "pension" (2,600). Confirma con el prospecto qué paquete quiere.';
+      }
+
+      const slip = buildSlip(lead, pkg);
       const pdf = await renderPaymentSlipPdf(lead, slip);
       const fileName = `Ficha-de-pago-${lead.folio}.pdf`;
       const path = `${lead.id}/ficha-pago-${slip.issuedAt.getTime()}.pdf`;
@@ -205,6 +231,7 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
         pago_ficha_fecha: cdmxDate(slip.issuedAt),
         pago_ficha_vence: slip.expiresAt.toISOString(),
         pago_monto_esperado: String(slip.amount),
+        pago_paquete: slip.concept,
         pago_referencia: slip.reference,
       };
       const captured = { ...lead.captured_data, ...pago };
@@ -218,7 +245,7 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
       });
       return [
         "Ficha de pago enviada por WhatsApp como PDF.",
-        `Monto: ${formatMxn(slip.amount)}. Referencia: ${slip.reference}. Vigencia: ${PAYMENT.validHours} horas.`,
+        `Paquete: ${slip.concept}. Monto: ${formatMxn(slip.amount)}. Referencia: ${slip.reference}. Vigencia: ${PAYMENT.validHours} horas.`,
         `Banco: ${PAYMENT.bank}. Beneficiario: ${PAYMENT.beneficiary}. CLABE: ${PAYMENT.clabe}.`,
         "pago_estado quedó como ficha_enviada.",
       ].join(" ");

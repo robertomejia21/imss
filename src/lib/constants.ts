@@ -47,6 +47,7 @@ export const DOC_TYPES: Record<string, string> = {
 export const TRAMITE_TYPES = [
   "Alta en IMSS",
   "Pensión por cesantía / vejez",
+  "Salario Topado",
   "Modalidad 40",
   "Modalidad 10",
   "Constancia de semanas cotizadas",

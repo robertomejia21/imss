@@ -4,19 +4,43 @@ import { digits } from "@/lib/utils";
 import type { Lead } from "@/lib/types";
 
 /**
- * Datos de pago de los honorarios. Los valores por defecto son FICTICIOS:
+ * Datos bancarios para el pago del servicio. Los valores por defecto son FICTICIOS:
  * define los reales con variables de entorno antes de salir a producción.
  */
 export const PAYMENT = {
-  businessName: process.env.PAYMENT_BUSINESS_NAME ?? "García Asesores",
-  beneficiary: process.env.PAYMENT_BENEFICIARY ?? "GARCÍA ASESORES",
+  businessName: process.env.PAYMENT_BUSINESS_NAME ?? "L&S Consultores Asociados AC",
+  beneficiary: process.env.PAYMENT_BENEFICIARY ?? "ANSAN DISEÑOS EXCLUSIVOS, S.A. DE C.V.",
   bank: process.env.PAYMENT_BANK ?? "BANCO DE PRUEBA S.A.",
   account: process.env.PAYMENT_ACCOUNT ?? "0000000000",
   clabe: process.env.PAYMENT_CLABE ?? "000000000000000000",
-  amount: Number(process.env.PAYMENT_AMOUNT ?? 1500),
   validHours: Number(process.env.PAYMENT_VALID_HOURS ?? 72),
-  concept: process.env.PAYMENT_CONCEPT ?? "Honorarios asesoría Alta IMSS",
 };
+
+/**
+ * Paquetes del Alta en IMSS.
+ * - medico: solo servicio médico para el titular y familiares directos.
+ * - pension: además cotiza semanas de pensión (RSV). Solo con este plan se pueden sumar Infonavit y/o AFORE (opcionales e independientes).
+ */
+export const ALTA_PRICES = { medico: 1500, pension: 2600, infonavit: 502, afore: 927 } as const;
+
+export type AltaPlan = "medico" | "pension";
+
+export interface AltaPackage {
+  plan: AltaPlan;
+  infonavit: boolean;
+  afore: boolean;
+}
+
+export function packageAmount(p: AltaPackage): number {
+  if (p.plan === "medico") return ALTA_PRICES.medico;
+  return ALTA_PRICES.pension + (p.infonavit ? ALTA_PRICES.infonavit : 0) + (p.afore ? ALTA_PRICES.afore : 0);
+}
+
+export function packageLabel(p: AltaPackage): string {
+  if (p.plan === "medico") return "Alta IMSS - Servicio médico";
+  const extras = [p.infonavit && "Infonavit", p.afore && "AFORE"].filter(Boolean);
+  return `Alta IMSS - Servicio médico y semanas (RSV)${extras.length ? ` + ${extras.join(" + ")}` : ""}`;
+}
 
 export const isPaymentConfigFictitious = () => !process.env.PAYMENT_CLABE;
 
@@ -34,14 +58,16 @@ export const cdmxDate = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "
 export interface PaymentSlip {
   reference: string;
   amount: number;
+  concept: string;
   issuedAt: Date;
   expiresAt: Date;
 }
 
-export function buildSlip(lead: Lead, issuedAt = new Date()): PaymentSlip {
+export function buildSlip(lead: Lead, pkg: AltaPackage, issuedAt = new Date()): PaymentSlip {
   return {
     reference: lead.folio,
-    amount: PAYMENT.amount,
+    amount: packageAmount(pkg),
+    concept: packageLabel(pkg),
     issuedAt,
     expiresAt: new Date(issuedAt.getTime() + PAYMENT.validHours * 3600_000),
   };
@@ -75,7 +101,7 @@ export async function renderPaymentSlipPdf(lead: Lead, slip: PaymentSlip): Promi
   const pdf = await PDFDocument.create();
   pdf.setTitle(`Ficha de pago ${slip.reference}`);
   pdf.setAuthor(PAYMENT.businessName);
-  pdf.setSubject(PAYMENT.concept);
+  pdf.setSubject(slip.concept);
 
   const page: PDFPage = pdf.addPage([612, 792]); // carta
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
@@ -92,7 +118,7 @@ export async function renderPaymentSlipPdf(lead: Lead, slip: PaymentSlip): Promi
   // Encabezado
   page.drawRectangle({ x: 0, y: height - 96, width, height: 96, color: GREEN });
   text(PAYMENT.businessName.toUpperCase(), M, height - 50, 20, bold, rgb(1, 1, 1));
-  text("Asesoría independiente en Seguridad Social", M, height - 70, 10, regular, rgb(0.85, 0.93, 0.89));
+  text("Especialistas en Seguridad Social", M, height - 70, 10, regular, rgb(0.85, 0.93, 0.89));
   right("FICHA DE PAGO", width - M, height - 50, 14, bold, rgb(1, 1, 1));
   right(`Folio ${slip.reference}`, width - M, height - 70, 10, regular, rgb(0.85, 0.93, 0.89));
 
@@ -112,7 +138,7 @@ export async function renderPaymentSlipPdf(lead: Lead, slip: PaymentSlip): Promi
   const rows: [string, string][] = [
     ["Nombre", lead.full_name ?? lead.wa_name ?? "—"],
     ["CURP", lead.curp ?? "—"],
-    ["Servicio", PAYMENT.concept],
+    ["Servicio", slip.concept],
   ];
   for (const [k, v] of rows) {
     y -= 20;
@@ -125,7 +151,7 @@ export async function renderPaymentSlipPdf(lead: Lead, slip: PaymentSlip): Promi
   const boxH = 70;
   page.drawRectangle({ x: M, y: y - boxH + 18, width: W, height: boxH, color: TINT, borderColor: GREEN, borderWidth: 1 });
   text("TOTAL A PAGAR", M + 18, y - 6, 10, bold, GREEN);
-  text("Pago único · Moneda nacional", M + 18, y - 24, 9, regular, MUTED);
+  text("Moneda nacional", M + 18, y - 24, 9, regular, MUTED);
   right(`${formatMxn(slip.amount)} MXN`, M + W - 18, y - 20, 24, bold, GREEN);
   y -= boxH + 10;
 
@@ -169,8 +195,8 @@ export async function renderPaymentSlipPdf(lead: Lead, slip: PaymentSlip): Promi
   // Aviso legal
   const legal =
     `${PAYMENT.businessName} es un despacho independiente de asesoría; no es el Instituto Mexicano del Seguro Social (IMSS) ni actúa en su nombre. ` +
-    "Este pago corresponde exclusivamente a honorarios por servicios de asesoría y gestión. La cuota de seguridad social se paga directamente al IMSS " +
-    "mediante línea de captura a nombre del asegurado. Los trámites ante el IMSS son gratuitos y pueden realizarse personalmente.";
+    "Este pago corresponde al servicio de gestión del Alta en IMSS indicado arriba. " +
+    `Los pagos se reciben en la cuenta a nombre de ${PAYMENT.beneficiary}.`;
   const legalLines = wrap(legal, regular, 8, W);
   let ly = 48 + legalLines.length * 11;
   page.drawLine({ start: { x: M, y: ly + 10 }, end: { x: M + W, y: ly + 10 }, thickness: 0.8, color: LINE });
@@ -213,9 +239,10 @@ export function evaluatePaymentReceipt(
   if (!pago) return ["No se pudieron leer los datos del comprobante de pago"];
   const issues: string[] = [];
   const data = lead.captured_data ?? {};
-  const expected = Number(data.pago_monto_esperado ?? PAYMENT.amount);
+  const expected = Number(data.pago_monto_esperado);
 
-  if (pago.monto == null) issues.push("No se pudo leer el monto del comprobante");
+  if (!expected) issues.push("No hay un monto esperado registrado para este prospecto");
+  else if (pago.monto == null) issues.push("No se pudo leer el monto del comprobante");
   else if (Math.abs(pago.monto - expected) > 0.009)
     issues.push(`El monto del comprobante (${formatMxn(pago.monto)}) no coincide con el esperado (${formatMxn(expected)})`);
 
