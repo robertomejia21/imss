@@ -115,4 +115,7 @@ export interface Profile {
   full_name: string | null;
   email: string | null;
   role: "admin" | "asesor";
+  phone?: string | null;
+  city?: string | null;
+  state?: string | null;
 }

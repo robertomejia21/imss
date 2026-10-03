@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { addNote, createTramite, updateLead, updateTramite } from "../../actions";
 import { ChatPanel } from "@/components/chat-panel";
 import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
+import { ContractButton } from "@/components/contract-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
 import { TRAMITE_STATUSES, TRAMITE_TYPES } from "@/lib/constants";
@@ -31,6 +32,8 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
 
   const extra = { ...l.form_data, ...l.captured_data } as Record<string, unknown>;
   const utmEntries = Object.entries(l.utm ?? {});
+  const isDesempleo = l.tramite_type === "Retiro por desempleo";
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-8">
@@ -86,6 +89,20 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   ))}
                 </Select>
               </Field>
+              {isDesempleo && (
+                <div className="space-y-3 rounded-lg border border-line p-3">
+                  <p className="text-xs font-medium text-muted">Datos para el contrato de retiro por desempleo</p>
+                  <Field label="AFORE">
+                    <Input name="afore" defaultValue={str(extra.afore)} placeholder="Ej. Coppel, Azteca, XXI Banorte" />
+                  </Field>
+                  <Field label="Domicilio" hint="Se llena solo con el frente de la INE.">
+                    <Textarea name="domicilio" rows={2} defaultValue={str(extra.domicilio)} />
+                  </Field>
+                  <Field label="Clave de elector (INE)">
+                    <Input name="clave_elector" defaultValue={str(extra.clave_elector)} className="font-mono uppercase" maxLength={18} />
+                  </Field>
+                </div>
+              )}
               <Field label="Asesor asignado">
                 <Select name="assigned_to" defaultValue={l.assigned_to ?? ""}>
                   <option value="">Sin asignar</option>
@@ -140,6 +157,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           <Card>
             <CardHeader title="Trámites" />
             <div className="space-y-3 p-4">
+              {isDesempleo && <ContractButton leadId={l.id} />}
               {(tramites as Tramite[] | null)?.map((t) => (
                 <details key={t.id} className="group rounded-lg border border-line">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3">

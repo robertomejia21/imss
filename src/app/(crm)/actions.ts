@@ -4,11 +4,13 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getStateInstance, isGreenApiConfigured, sendText, setWebhook } from "@/lib/whatsapp/green-api";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getStateInstance, isGreenApiConfigured, sendFileByUrl, sendText, setWebhook } from "@/lib/whatsapp/green-api";
+import { getContractData, missingContractFields, renderDesempleoContract } from "@/lib/contracts";
 import { replyToLead } from "@/lib/ai/agent";
 import { leadStatusMeta } from "@/lib/constants";
-import { normalizeMxPhone } from "@/lib/utils";
-import type { DocumentStatus, LeadStatus, TramiteStatus } from "@/lib/types";
+import { chatIdFromPhone, normalizeMxPhone } from "@/lib/utils";
+import type { DocumentStatus, Lead, LeadStatus, TramiteStatus } from "@/lib/types";
 
 async function auth() {
   const supabase = await createClient();
@@ -53,7 +55,21 @@ export async function updateLead(leadId: string, formData: FormData) {
     assigned_to: str(formData, "assigned_to"),
     notes: str(formData, "notes"),
   };
-  await supabase.from("leads").update(update).eq("id", leadId);
+  // Campos del contrato de retiro por desempleo (se guardan en captured_data)
+  const contractKeys = ["afore", "domicilio", "clave_elector"] as const;
+  const contractFields = contractKeys.filter((k) => formData.has(k));
+  let captured: Record<string, unknown> | undefined;
+  if (contractFields.length) {
+    const { data: current } = await supabase.from("leads").select("captured_data").eq("id", leadId).single();
+    const next: Record<string, unknown> = { ...(current?.captured_data ?? {}) };
+    for (const k of contractFields) {
+      const v = str(formData, k);
+      if (v) next[k] = k === "clave_elector" ? v.toUpperCase() : v;
+      else delete next[k];
+    }
+    captured = next;
+  }
+  await supabase.from("leads").update(captured ? { ...update, captured_data: captured } : update).eq("id", leadId);
   await supabase.from("activities").insert({ lead_id: leadId, kind: "note", content: "Datos del prospecto actualizados", created_by: user.id });
   revalidatePath(`/leads/${leadId}`);
 }
@@ -257,4 +273,86 @@ export async function checkGreenApi() {
   } catch (e) {
     return { state: "error", error: (e as Error).message };
   }
+}
+
+// ---------- Equipo (asesores) ----------
+
+export async function createAdvisor(formData: FormData) {
+  await auth();
+  const email = str(formData, "email");
+  const password = str(formData, "password");
+  const fullName = str(formData, "full_name");
+  const phoneRaw = str(formData, "phone");
+  const city = str(formData, "city");
+  const state = str(formData, "state");
+  if (!email || !password || !fullName) return { error: "Nombre, correo y contraseña son obligatorios" };
+  if (password.length < 8) return { error: "La contraseña debe tener al menos 8 caracteres" };
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: fullName },
+  });
+  if (error || !data.user) return { error: error?.message ?? "No se pudo crear el usuario" };
+  // El trigger handle_new_user crea el perfil; se asegura nombre, rol y WhatsApp
+  const { error: upErr } = await admin
+    .from("profiles")
+    .upsert({ id: data.user.id, email, full_name: fullName, role: "asesor", phone: phoneRaw ? normalizeMxPhone(phoneRaw) : null, city, state });
+  revalidatePath("/configuracion");
+  if (upErr) return { error: `Usuario creado, pero no se guardaron su WhatsApp, ciudad y estado: ${upErr.message}` };
+  return { ok: true };
+}
+
+export async function updateAdvisor(profileId: string, formData: FormData) {
+  const { supabase } = await auth();
+  const phoneRaw = str(formData, "phone");
+  await supabase
+    .from("profiles")
+    .update({
+      full_name: str(formData, "full_name"),
+      phone: phoneRaw ? normalizeMxPhone(phoneRaw) : null,
+      city: str(formData, "city"),
+      state: str(formData, "state"),
+    })
+    .eq("id", profileId);
+  revalidatePath("/configuracion");
+}
+
+// ---------- Contrato de retiro por desempleo ----------
+
+/** Genera el contrato con los datos del CRM y lo envía en PDF al WhatsApp del asesor asignado. */
+export async function sendDesempleoContract(leadId: string): Promise<{ error?: string; missing?: string[]; url?: string; sentTo?: string }> {
+  const { supabase, user } = await auth();
+  const { data: lead } = await supabase.from("leads").select("*").eq("id", leadId).single();
+  if (!lead) return { error: "Prospecto no encontrado" };
+
+  const data = await getContractData(supabase, lead as Lead);
+  const missing = missingContractFields(data);
+  if (missing.length) return { missing };
+  if (!isGreenApiConfigured()) return { error: "Green API no está configurado" };
+
+  const pdf = await renderDesempleoContract(data);
+  const path = `${leadId}/contrato-desempleo-${Date.now()}.pdf`;
+  const { error: upErr } = await supabase.storage.from("media").upload(path, pdf, { contentType: "application/pdf" });
+  if (upErr) return { error: `No se pudo guardar el contrato: ${upErr.message}` };
+  const { data: signed } = await supabase.storage.from("media").createSignedUrl(path, 60 * 60 * 24 * 7);
+  if (!signed) return { error: "No se pudo generar el enlace del contrato" };
+
+  const fileName = `Contrato retiro desempleo - ${data.beneficiario} (${lead.folio}).pdf`;
+  try {
+    await sendFileByUrl(chatIdFromPhone(data.asesorPhone!), signed.signedUrl, fileName, `Contrato de retiro por desempleo · ${data.beneficiario} · ${lead.folio}`);
+  } catch (e) {
+    return { error: `Contrato generado, pero no se pudo enviar por WhatsApp: ${(e as Error).message}`, url: signed.signedUrl };
+  }
+  await supabase.from("activities").insert({
+    lead_id: leadId,
+    kind: "document",
+    content: `Contrato de retiro por desempleo enviado por WhatsApp al asesor ${data.profesionista}`,
+    meta: { path },
+    created_by: user.id,
+  });
+  revalidatePath(`/leads/${leadId}`);
+  return { url: signed.signedUrl, sentTo: data.profesionista! };
 }

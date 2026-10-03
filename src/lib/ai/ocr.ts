@@ -240,6 +240,7 @@ export function ocrSummaryForAgent(ocr: OcrResult, status: DocumentStatus, issue
     ["CURP", ocr.curp],
     ["NSS", ocr.nss],
     ["RFC", ocr.rfc],
+    ["Clave de elector", ocr.clave_elector],
     ["Fecha de nacimiento", ocr.fecha_nacimiento],
     ["Domicilio", ocr.domicilio],
     ["Vigencia", ocr.vigencia],

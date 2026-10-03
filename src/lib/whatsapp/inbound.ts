@@ -141,6 +141,11 @@ export async function storeWebhook(payload: GreenWebhook): Promise<InboundResult
 
   if (payload.typeWebhook !== "incomingMessageReceived") return { kind: "ignored" };
 
+  // Mensajes de los asesores del equipo (p. ej. al recibir un contrato): no son prospectos y la IA no les responde
+  const last10 = chatId.split("@")[0]!.slice(-10);
+  const { data: staff } = await db.from("profiles").select("id").like("phone", `%${last10}`).limit(1);
+  if (staff?.length) return { kind: "ignored" };
+
   const { type, body } = parseContent(payload.messageData);
   const waName = payload.senderData?.senderName || payload.senderData?.chatName;
   const lead = await findOrCreateLead(db, chatId, waName, body);
@@ -252,6 +257,13 @@ export async function processMedia(messageId: string) {
           if (!lead.rfc && ocr.rfc) fill.rfc = ocr.rfc.toUpperCase();
           if (!lead.birth_date && ocr.fecha_nacimiento && /^\d{4}-\d{2}-\d{2}$/.test(ocr.fecha_nacimiento))
             fill.birth_date = ocr.fecha_nacimiento;
+          // Datos de la INE que se usan en el contrato de retiro por desempleo
+          if (ocr.tipo_documento === "ine") {
+            const extra: Record<string, string> = {};
+            if (!lead.captured_data?.domicilio && ocr.domicilio) extra.domicilio = ocr.domicilio;
+            if (!lead.captured_data?.clave_elector && ocr.clave_elector) extra.clave_elector = ocr.clave_elector.toUpperCase();
+            if (Object.keys(extra).length) fill.captured_data = { ...lead.captured_data, ...extra };
+          }
           if (Object.keys(fill).length) await db.from("leads").update(fill).eq("id", lead.id);
         }
         await db.from("activities").insert({
