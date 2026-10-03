@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { FileCheck2, KanbanSquare, LayoutDashboard, LogOut, Menu, MessagesSquare, Settings, Users, X } from "lucide-react";
+import { FileCheck2, KanbanSquare, LayoutDashboard, LogOut, Menu, MessagesSquare, Settings, UserCog, Users, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -13,6 +13,7 @@ const NAV = [
   { href: "/leads", label: "Prospectos", icon: Users },
   { href: "/pipeline", label: "Embudo", icon: KanbanSquare },
   { href: "/documentos", label: "Documentos", icon: FileCheck2 },
+  { href: "/asesores", label: "Asesores", icon: UserCog },
   { href: "/configuracion", label: "Configuración", icon: Settings },
 ];
 

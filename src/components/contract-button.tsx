@@ -32,7 +32,7 @@ export function ContractButton({ leadId }: { leadId: string }) {
             ))}
           </ul>
           <p className="mt-1 text-amber-800">
-            Pídeselos al cliente o captúralos en “Datos del prospecto”. El domicilio y la clave de elector se llenan solos al recibir la INE. El asesor y su WhatsApp se registran en Configuración → Equipo.
+            Pídeselos al cliente o captúralos en “Datos del prospecto”. El domicilio y la clave de elector se llenan solos al recibir la INE. El asesor y su WhatsApp se registran en el menú Asesores.
           </p>
         </div>
       )}

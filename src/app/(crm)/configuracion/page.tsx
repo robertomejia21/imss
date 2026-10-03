@@ -1,19 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { saveAgentSettings } from "../actions";
 import { GreenApiPanel } from "@/components/green-api-panel";
-import { TeamPanel } from "@/components/team-panel";
 import { Button, Card, CardHeader, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
 import { DEFAULT_AGENT_PROMPT } from "@/lib/ai/prompt";
-import type { AgentSettings, Profile } from "@/lib/types";
+import type { AgentSettings } from "@/lib/types";
 
 export const metadata = { title: "Configuración" };
 
 export default async function SettingsPage() {
   const supabase = await createClient();
-  const [{ data }, { data: profiles }] = await Promise.all([
-    supabase.from("agent_settings").select("*").eq("id", 1).single(),
-    supabase.from("profiles").select("*").order("created_at"),
-  ]);
+  const { data } = await supabase.from("agent_settings").select("*").eq("id", 1).single();
   const s = data as AgentSettings | null;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
   const waNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "";
@@ -31,7 +27,6 @@ export default async function SettingsPage() {
       <PageHeader title="Configuración" description="Asistente de IA, conexión con WhatsApp e integraciones." />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
-        <div className="space-y-6">
         <Card>
           <CardHeader title="Asistente de IA" />
           <form action={saveAgentSettings} className="space-y-4 p-5">
@@ -69,15 +64,6 @@ export default async function SettingsPage() {
             <Button>Guardar configuración</Button>
           </form>
         </Card>
-
-        <Card>
-          <CardHeader title="Equipo · asesores" />
-          <p className="px-5 pt-4 text-xs text-muted">
-            El asesor asignado a un prospecto aparece en el contrato de retiro por desempleo como “El Profesionista” (con su ciudad y estado como domicilio) y recibe el PDF en su WhatsApp.
-          </p>
-          <TeamPanel profiles={(profiles ?? []) as Profile[]} />
-        </Card>
-        </div>
 
         <div className="space-y-6">
           <Card>

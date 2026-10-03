@@ -300,7 +300,7 @@ export async function createAdvisor(formData: FormData) {
   const { error: upErr } = await admin
     .from("profiles")
     .upsert({ id: data.user.id, email, full_name: fullName, role: "asesor", phone: phoneRaw ? normalizeMxPhone(phoneRaw) : null, city, state });
-  revalidatePath("/configuracion");
+  revalidatePath("/asesores");
   if (upErr) return { error: `Usuario creado, pero no se guardaron su WhatsApp, ciudad y estado: ${upErr.message}` };
   return { ok: true };
 }
@@ -317,7 +317,7 @@ export async function updateAdvisor(profileId: string, formData: FormData) {
       state: str(formData, "state"),
     })
     .eq("id", profileId);
-  revalidatePath("/configuracion");
+  revalidatePath("/asesores");
 }
 
 // ---------- Contrato de retiro por desempleo ----------
