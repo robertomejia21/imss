@@ -18,6 +18,9 @@ const DocTypeEnum = z.enum([
   "constancia_semanas",
   "rfc",
   "comprobante_pago",
+  "talon_pago",
+  "formato_autorizacion",
+  "selfie_ine",
   "otro",
 ]);
 
@@ -77,6 +80,9 @@ Analiza el documento adjunto y extrae sus datos con precisión, carácter por ca
 - Para INE/credencial, indica si la foto muestra el frente, el reverso o ambos, y la vigencia.
 - Si es un comprobante de pago, transferencia (SPEI), depósito o ticket bancario: tipo_documento = "comprobante_pago", llena "pago" con monto, fecha, cuentas, clave de rastreo, concepto y ordenante, y deja nombre_completo, curp y nss en null. Revisa con cuidado señales de edición (tipografías distintas, cifras desalineadas, recortes).
 - Si es la foto de una persona (selfie o retrato, no un documento ni una INE): tipo_documento = "foto_persona", llena "foto" y deja los datos personales en null. es_documento_oficial = true si es una foto real de la persona (no captura de pantalla, foto de otra foto ni imagen de internet).
+- Si es un talón o recibo de pago de nómina, de pensión o de jubilación: tipo_documento = "talon_pago"; en nombre_completo el trabajador o pensionado, curp/nss/rfc si aparecen, y en otros_datos la dependencia o institución que paga, el periodo, la percepción neta, la matrícula o número de empleado y la delegación si aparecen.
+- Si es un formato o carta de autorización (por ejemplo para consultar capacidad de descuento) llenado por el cliente: tipo_documento = "formato_autorizacion"; en nombre_completo el nombre escrito y en otros_datos si tiene firma ("firma: sí/no") y la fecha.
+- Si es una selfie de la persona sosteniendo su INE: tipo_documento = "selfie_ine"; es_documento_oficial = true si es una foto real donde se ven el rostro y la INE original; en observaciones anota si la INE no se lee o el rostro no coincide con la foto de la INE.
 - Si es un estado de cuenta bancario: tipo_documento = "estado_cuenta"; en nombre_completo pon el titular y en otros_datos el banco y la CLABE o número de cuenta tal como aparecen.
 - En "observaciones" anota problemas útiles para el asesor: foto borrosa, reflejos, documento vencido, recortado, datos ilegibles, posibles alteraciones, etc.`;
 

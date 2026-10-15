@@ -43,6 +43,9 @@ export const DOC_TYPES: Record<string, string> = {
   constancia_semanas: "Constancia de semanas cotizadas",
   rfc: "Constancia de situación fiscal",
   comprobante_pago: "Comprobante de pago",
+  talon_pago: "Talón de pago (nómina o pensión)",
+  formato_autorizacion: "Formato de autorización",
+  selfie_ine: "Selfie con INE",
   otro: "Otro",
 };
 
