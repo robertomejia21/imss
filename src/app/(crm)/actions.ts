@@ -9,8 +9,11 @@ import { getStateInstance, isGreenApiConfigured, sendFileByUrl, sendText, setWeb
 import { getContractData, missingContractFields, renderDesempleoContract } from "@/lib/contracts";
 import { replyToLead } from "@/lib/ai/agent";
 import { leadStatusMeta } from "@/lib/constants";
+import { addProductToLead } from "@/lib/products";
+import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico } from "@/lib/payment-verification";
+import { isMinorIssue } from "@/lib/payments";
 import { chatIdFromPhone, normalizeMxPhone } from "@/lib/utils";
-import type { DocumentStatus, Lead, LeadStatus, TramiteStatus } from "@/lib/types";
+import type { DocumentRow, DocumentStatus, Lead, LeadStatus, TramiteStatus } from "@/lib/types";
 
 async function auth() {
   const supabase = await createClient();
@@ -51,7 +54,6 @@ export async function updateLead(leadId: string, formData: FormData) {
     rfc: str(formData, "rfc")?.toUpperCase() ?? null,
     email: str(formData, "email"),
     birth_date: str(formData, "birth_date"),
-    tramite_type: str(formData, "tramite_type"),
     assigned_to: str(formData, "assigned_to"),
     notes: str(formData, "notes"),
   };
@@ -84,7 +86,6 @@ export async function createLead(formData: FormData) {
       full_name: str(formData, "full_name"),
       phone,
       wa_chat_id: phone ? `${phone}@c.us` : null,
-      tramite_type: str(formData, "tramite_type"),
       source: "manual",
       assigned_to: user.id,
     })
@@ -92,6 +93,9 @@ export async function createLead(formData: FormData) {
     .single();
   if (error) throw new Error(error.message.includes("duplicate") ? "Ya existe un prospecto con ese teléfono" : error.message);
   await supabase.from("activities").insert({ lead_id: data.id, kind: "system", content: "Prospecto creado manualmente", created_by: user.id });
+  for (const product of formData.getAll("products")) {
+    if (typeof product === "string" && product) await addProductToLead(supabase, data.id, product, "interesado", { createdBy: user.id });
+  }
   redirect(`/leads/${data.id}`);
 }
 
@@ -170,20 +174,36 @@ export async function createTramite(leadId: string, formData: FormData) {
   const { supabase, user } = await auth();
   const tipo = str(formData, "tipo");
   if (!tipo) return;
-  await supabase.from("tramites").insert({
-    lead_id: leadId,
-    tipo,
-    folio_imss: str(formData, "folio_imss"),
-    due_date: str(formData, "due_date"),
+  const status = (str(formData, "status") ?? "pendiente") as TramiteStatus;
+  const r = await addProductToLead(supabase, leadId, tipo, status === "interesado" ? "interesado" : "pendiente", {
     notes: str(formData, "notes"),
+    createdBy: user.id,
+  });
+  if (!r.tramite) return;
+  // Estados más avanzados (en proceso, en espera IMSS…) se aplican tal cual
+  const extra = {
+    ...(status !== "interesado" && status !== "pendiente" ? { status } : {}),
+    ...(str(formData, "folio_imss") ? { folio_imss: str(formData, "folio_imss") } : {}),
+    ...(str(formData, "due_date") ? { due_date: str(formData, "due_date") } : {}),
+  };
+  if (Object.keys(extra).length) await supabase.from("tramites").update(extra).eq("id", r.tramite.id);
+  await supabase.from("activities").insert({
+    lead_id: leadId,
+    kind: "tramite",
+    content: r.result === "creado" ? `Producto agregado: ${tipo}` : `Producto actualizado: ${tipo}`,
     created_by: user.id,
   });
-  await supabase.from("activities").insert({ lead_id: leadId, kind: "tramite", content: `Trámite creado: ${tipo}`, created_by: user.id });
+  await promoteLeadIfInProcess(supabase, leadId, status);
+  revalidatePath(`/leads/${leadId}`);
+}
+
+/** El prospecto pasa a "En trámite" cuando alguno de sus productos ya se está gestionando. */
+async function promoteLeadIfInProcess(supabase: Awaited<ReturnType<typeof createClient>>, leadId: string, status: TramiteStatus | null) {
+  if (status !== "en_proceso" && status !== "en_espera_imss") return;
   const { data: lead } = await supabase.from("leads").select("status").eq("id", leadId).single();
   if (lead && ["nuevo", "en_conversacion", "registro_completo", "documentos_pendientes", "en_revision"].includes(lead.status)) {
     await supabase.from("leads").update({ status: "en_tramite" }).eq("id", leadId);
   }
-  revalidatePath(`/leads/${leadId}`);
 }
 
 export async function updateTramite(tramiteId: string, leadId: string, formData: FormData) {
@@ -204,6 +224,7 @@ export async function updateTramite(tramiteId: string, leadId: string, formData:
     content: `Trámite actualizado${status ? ` → ${status}` : ""}`,
     created_by: user.id,
   });
+  await promoteLeadIfInProcess(supabase, leadId, status);
   revalidatePath(`/leads/${leadId}`);
 }
 
@@ -227,6 +248,41 @@ export async function reviewDocument(documentId: string, status: DocumentStatus,
   }
   revalidatePath("/documentos");
   if (doc) revalidatePath(`/leads/${doc.lead_id}`);
+}
+
+/** Vuelve a consultar el CEP de Banxico para un comprobante (p. ej. si al recibirlo aún no aparecía). */
+export async function recheckPaymentWithBanxico(documentId: string): Promise<{ error?: string; estado?: string; detalle?: string }> {
+  const { supabase, user } = await auth();
+  const { data: doc } = await supabase.from("documents").select("*").eq("id", documentId).single<DocumentRow>();
+  if (!doc || doc.doc_type !== "comprobante_pago") return { error: "Este documento no es un comprobante de pago" };
+  const { data: lead } = await supabase.from("leads").select("*").eq("id", doc.lead_id).single<Lead>();
+  if (!lead) return { error: "Prospecto no encontrado" };
+
+  const ex = doc.extracted as { pago?: Parameters<typeof checkReceiptWithBanxico>[0]; summary?: string };
+  const bx = await checkReceiptWithBanxico(ex.pago ?? null, Number(lead.captured_data?.pago_monto_esperado) || undefined);
+
+  // Observaciones del OCR sin las de la consulta anterior a Banxico
+  const labels = Object.values(BANXICO_LABEL);
+  const base = doc.issues.filter((i) => !labels.some((l) => i.startsWith(l)) && !i.startsWith("Observación menor: no se pudo verificar en Banxico"));
+  const isDuplicate = base.some((i) => i.startsWith("Este comprobante ya se había recibido"));
+  const baseStatus: DocumentStatus = doc.status === "invalido" ? "invalido" : base.some((i) => !isMinorIssue(i)) ? "con_observaciones" : "valido";
+  const { status, issues } = applyBanxicoCheck(baseStatus, base, bx, isDuplicate);
+  const summary = [...(ex.summary ?? "").split("\n").filter((l) => !l.startsWith("VERIFICACIÓN BANXICO")), banxicoLineForAgent(bx)].join("\n");
+
+  await supabase.from("documents").update({ status, issues, extracted: { ...doc.extracted, banxico: bx, summary } }).eq("id", doc.id);
+  const captured: Record<string, unknown> = { ...lead.captured_data, pago_banxico: bx.estado, pago_banxico_detalle: bx.detalle };
+  if (status === "valido") captured.pago_estado = "comprobante_valido";
+  await supabase.from("leads").update({ captured_data: captured }).eq("id", lead.id);
+  await supabase.from("activities").insert({
+    lead_id: lead.id,
+    kind: "document",
+    content: `${BANXICO_LABEL[bx.estado]} (consulta manual): ${bx.detalle}`,
+    meta: { banxico: bx },
+    created_by: user.id,
+  });
+  revalidatePath(`/leads/${lead.id}`);
+  revalidatePath("/documentos");
+  return { estado: BANXICO_LABEL[bx.estado], detalle: bx.detalle };
 }
 
 export async function getMediaUrl(path: string) {
@@ -273,6 +329,38 @@ export async function checkGreenApi() {
   } catch (e) {
     return { state: "error", error: (e as Error).message };
   }
+}
+
+// ---------- Catálogo de productos ----------
+
+export async function createProduct(formData: FormData) {
+  const { supabase } = await auth();
+  const name = str(formData, "name");
+  if (!name) return { error: "Escribe el nombre del producto" };
+  const { data: last } = await supabase.from("products").select("sort_order").order("sort_order", { ascending: false }).limit(1);
+  const { error } = await supabase.from("products").insert({
+    name,
+    description: str(formData, "description") ?? "",
+    offered_by_ai: formData.get("offered_by_ai") === "on",
+    sort_order: (last?.[0]?.sort_order ?? 0) + 10,
+  });
+  if (error) return { error: error.code === "23505" ? "Ya existe un producto con ese nombre" : error.message };
+  revalidatePath("/productos");
+  return { ok: true };
+}
+
+export async function updateProduct(productId: string, formData: FormData) {
+  const { supabase } = await auth();
+  await supabase
+    .from("products")
+    .update({
+      description: str(formData, "description") ?? "",
+      offered_by_ai: formData.get("offered_by_ai") === "on",
+      active: formData.get("active") === "on",
+      sort_order: Number(formData.get("sort_order") ?? 0) || 0,
+    })
+    .eq("id", productId);
+  revalidatePath("/productos");
 }
 
 // ---------- Equipo (asesores) ----------

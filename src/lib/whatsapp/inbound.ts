@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadMedia, getDownloadUrl, type GreenWebhook } from "./green-api";
 import { transcribeAudio } from "@/lib/ai/transcribe";
 import { evaluateDocument, extractDocument, isOcrSupported, ocrSummaryForAgent } from "@/lib/ai/ocr";
+import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico, type BanxicoCheck } from "@/lib/payment-verification";
 import { phoneFromChatId } from "@/lib/utils";
 import type { DocumentStatus, Lead, Message, MessageType } from "@/lib/types";
 import type { OcrResult } from "@/lib/ai/ocr";
@@ -226,15 +227,20 @@ export async function processMedia(messageId: string) {
       } else {
         const ocr = await extractDocument(buffer, mime);
         let { status, issues } = evaluateDocument(ocr, lead);
+        let banxico: BanxicoCheck | undefined;
 
-        // Comprobante de pago: no aceptar el mismo comprobante dos veces (de este u otro prospecto)
         if (ocr.tipo_documento === "comprobante_pago") {
+          // No aceptar el mismo comprobante dos veces (de este u otro prospecto)
           const dup = await findDuplicateReceipt(db, doc!.id, ocr.pago?.clave_rastreo, ocr.pago?.folio_operacion);
           if (dup) {
             issues = [`Este comprobante ya se había recibido antes (${dup})`, ...issues];
             if (status === "valido") status = "con_observaciones";
           }
+          // ¿La transferencia existe de verdad? Consulta el CEP de Banxico
+          banxico = await checkReceiptWithBanxico(ocr.pago, Number(lead.captured_data?.pago_monto_esperado) || undefined);
+          ({ status, issues } = applyBanxicoCheck(status, issues, banxico, !!dup));
         }
+        const summary = ocrSummaryForAgent(ocr, status, issues);
         await db
           .from("documents")
           .update({
@@ -242,12 +248,12 @@ export async function processMedia(messageId: string) {
             status,
             issues,
             confidence: ocr.confianza,
-            extracted: { ...ocr, summary: ocrSummaryForAgent(ocr, status, issues) },
+            extracted: { ...ocr, ...(banxico ? { banxico } : {}), summary: banxico ? `${summary}\n${banxicoLineForAgent(banxico)}` : summary },
           })
           .eq("id", doc!.id);
 
         if (ocr.tipo_documento === "comprobante_pago") {
-          await recordPaymentReceipt(db, lead, ocr, status, issues);
+          await recordPaymentReceipt(db, lead, ocr, status, issues, banxico);
         } else if (status !== "invalido") {
           // Completa datos vacíos del lead con lo leído en documentos válidos
           const fill: Partial<Lead> = {};
@@ -305,10 +311,14 @@ async function findDuplicateReceipt(db: Db, docId: string, claveRastreo?: string
 }
 
 /** Deja el estado del pago en captured_data para el agente y los asesores. */
-async function recordPaymentReceipt(db: Db, lead: Lead, ocr: OcrResult, status: DocumentStatus, issues: string[]) {
+async function recordPaymentReceipt(db: Db, lead: Lead, ocr: OcrResult, status: DocumentStatus, issues: string[], banxico?: BanxicoCheck) {
   const p = ocr.pago;
   const pagoEstado = status === "valido" ? "comprobante_valido" : "comprobante_en_revision";
   const update: Record<string, string> = { pago_estado: pagoEstado };
+  if (banxico) {
+    update.pago_banxico = banxico.estado;
+    update.pago_banxico_detalle = banxico.detalle;
+  }
   if (p?.monto != null) update.pago_monto = String(p.monto);
   if (p?.fecha_operacion) update.pago_fecha = p.fecha_operacion;
   if (p?.banco_emisor) update.pago_banco = p.banco_emisor;
@@ -335,7 +345,9 @@ async function recordPaymentReceipt(db: Db, lead: Lead, ocr: OcrResult, status: 
     kind: "document",
     content:
       pagoEstado === "comprobante_valido"
-        ? `Comprobante de pago prevalidado por IA (${update.pago_monto ?? "?"} MXN, ${update.pago_rastreo ?? "sin rastreo"}). Falta conciliar contra el banco.`
+        ? banxico?.estado === "confirmado"
+          ? `${BANXICO_LABEL.confirmado}: ${banxico.detalle}`
+          : `Comprobante de pago prevalidado por IA (${update.pago_monto ?? "?"} MXN, ${update.pago_rastreo ?? "sin rastreo"}). Falta conciliar contra el banco.`
         : `Comprobante de pago con observaciones: ${issues.join("; ")}`,
     meta: update,
   });

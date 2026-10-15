@@ -9,6 +9,8 @@ const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "ut
 
 export async function submitRegistro(_prev: RegistroState, formData: FormData): Promise<RegistroState> {
   if (formData.get("company")) return { error: "Error" }; // honeypot anti-bots
+  const products = formData.getAll("products").filter((v): v is string => typeof v === "string" && v.trim() !== "");
+  if (products.length === 0) return { errors: { products: ["Elige al menos una opción"] } };
   if (formData.get("privacy") !== "on") return { errors: { privacy: ["Debes aceptar el aviso de privacidad"] } };
 
   const utm: Record<string, string> = {};
@@ -23,7 +25,7 @@ export async function submitRegistro(_prev: RegistroState, formData: FormData): 
     email: formData.get("email") ?? "",
     curp: formData.get("curp") ?? "",
     nss: formData.get("nss") ?? "",
-    tramite_type: formData.get("tramite_type") ?? "",
+    products,
     message: formData.get("message") ?? "",
     source: utm.utm_source?.toLowerCase().includes("facebook") || utm.fbclid ? "facebook" : "formulario",
     utm,

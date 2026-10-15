@@ -231,7 +231,7 @@ export interface PaymentReceipt {
   ordenante: string | null;
 }
 
-/** Reglas de la sección 7 del prompt de Aurora. Devuelve observaciones (vacío = coincide). */
+/** Reglas de la sección 7 del prompt del agente. Devuelve observaciones (vacío = coincide). */
 export function evaluatePaymentReceipt(
   pago: PaymentReceipt | null,
   lead: { folio: string; captured_data: Record<string, unknown> },

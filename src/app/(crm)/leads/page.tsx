@@ -5,7 +5,8 @@ import { createLead } from "../actions";
 import { Avatar, Button, Card, EmptyState, Field, Input, PageHeader, Select } from "@/components/ui";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
-import { LEAD_STATUSES, TRAMITE_TYPES } from "@/lib/constants";
+import { LEAD_STATUSES } from "@/lib/constants";
+import { getProducts } from "@/lib/products";
 import { displayName, formatDate, formatPhone, timeAgo } from "@/lib/utils";
 import type { Lead } from "@/lib/types";
 
@@ -24,7 +25,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   if (status) query = query.eq("status", status);
   if (source) query = query.eq("source", source);
   if (q) query = query.or(`full_name.ilike.%${q}%,wa_name.ilike.%${q}%,phone.ilike.%${q}%,folio.ilike.%${q}%,curp.ilike.%${q}%,nss.ilike.%${q}%`);
-  const { data } = await query;
+  const [{ data }, products] = await Promise.all([query, getProducts(supabase)]);
   const leads = (data ?? []) as Lead[];
 
   return (
@@ -48,14 +49,17 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                 <Field label="WhatsApp (10 dígitos)">
                   <Input name="phone" inputMode="tel" placeholder="55 1234 5678" />
                 </Field>
-                <Field label="Trámite">
-                  <Select name="tramite_type" defaultValue="">
-                    <option value="">Sin definir</option>
-                    {TRAMITE_TYPES.map((t) => (
-                      <option key={t}>{t}</option>
+                <fieldset>
+                  <legend className="mb-1.5 text-sm font-medium text-ink">Le interesa</legend>
+                  <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-line p-2 scrollbar-thin">
+                    {products.map((p) => (
+                      <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-stone-50">
+                        <input type="checkbox" name="products" value={p.name} className="size-4 accent-brand-600" />
+                        {p.name}
+                      </label>
                     ))}
-                  </Select>
-                </Field>
+                  </div>
+                </fieldset>
                 <Button className="w-full">Crear</Button>
               </form>
             </Card>
@@ -96,7 +100,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
               <thead className="border-b border-line bg-stone-50/70 text-left text-xs font-medium text-muted">
                 <tr>
                   <th className="px-5 py-3">Prospecto</th>
-                  <th className="px-3 py-3">Trámite</th>
+                  <th className="px-3 py-3">Productos</th>
                   <th className="px-3 py-3">Estado</th>
                   <th className="px-3 py-3">Origen</th>
                   <th className="px-3 py-3">CURP</th>

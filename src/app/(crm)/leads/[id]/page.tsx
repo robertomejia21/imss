@@ -8,7 +8,8 @@ import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
-import { TRAMITE_STATUSES, TRAMITE_TYPES } from "@/lib/constants";
+import { TRAMITE_STATUSES } from "@/lib/constants";
+import { getProducts, isOpenTramite } from "@/lib/products";
 import { displayName, formatDate, formatDateTime, isValidCurp, isValidNss } from "@/lib/utils";
 import type { Activity, DocumentRow, Lead, Message, Profile, Tramite } from "@/lib/types";
 
@@ -16,7 +17,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: lead }, { data: messages }, { data: docs }, { data: tramites }, { data: activities }, { data: profiles }] =
+  const [{ data: lead }, { data: messages }, { data: docs }, { data: tramites }, { data: activities }, { data: profiles }, products] =
     await Promise.all([
       supabase.from("leads").select("*").eq("id", id).maybeSingle(),
       supabase.from("messages").select("*").eq("lead_id", id).order("created_at").limit(300),
@@ -24,6 +25,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
       supabase.from("tramites").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
       supabase.from("activities").select("*").eq("lead_id", id).order("created_at", { ascending: false }).limit(50),
       supabase.from("profiles").select("id, full_name, email, role"),
+      getProducts(supabase),
     ]);
   if (!lead) notFound();
   const l = lead as Lead;
@@ -32,7 +34,11 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
 
   const extra = { ...l.form_data, ...l.captured_data } as Record<string, unknown>;
   const utmEntries = Object.entries(l.utm ?? {});
-  const isDesempleo = l.tramite_type === "Retiro por desempleo";
+  const leadTramites = (tramites ?? []) as Tramite[];
+  const openProducts = new Set(leadTramites.filter(isOpenTramite).map((t) => t.tipo.toLowerCase()));
+  const isDesempleo = openProducts.has("retiro por desempleo");
+  // Productos que todavía no tiene abiertos, para agregarlos
+  const available = products.map((p) => p.name).filter((n) => !openProducts.has(n.toLowerCase()));
   const str = (v: unknown) => (typeof v === "string" ? v : "");
 
   return (
@@ -81,14 +87,6 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <Input name="email" type="email" defaultValue={l.email ?? ""} />
                 </Field>
               </div>
-              <Field label="Trámite">
-                <Select name="tramite_type" defaultValue={l.tramite_type ?? ""}>
-                  <option value="">Sin definir</option>
-                  {[...new Set([...(l.tramite_type ? [l.tramite_type] : []), ...TRAMITE_TYPES])].map((t) => (
-                    <option key={t}>{t}</option>
-                  ))}
-                </Select>
-              </Field>
               {isDesempleo && (
                 <div className="space-y-3 rounded-lg border border-line p-3">
                   <p className="text-xs font-medium text-muted">Datos para el contrato de retiro por desempleo</p>
@@ -155,10 +153,11 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
         {/* Trámites, documentos, bitácora */}
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Trámites" />
+            <CardHeader title={`Productos (${leadTramites.filter(isOpenTramite).length})`} />
             <div className="space-y-3 p-4">
               {isDesempleo && <ContractButton leadId={l.id} />}
-              {(tramites as Tramite[] | null)?.map((t) => (
+              {leadTramites.length === 0 && <p className="text-sm text-muted">Aún no ha pedido información de ningún producto.</p>}
+              {leadTramites.map((t) => (
                 <details key={t.id} className="group rounded-lg border border-line">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3">
                     <div>
@@ -191,13 +190,22 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
               ))}
               <details className="rounded-lg border border-dashed border-line">
                 <summary className="flex cursor-pointer list-none items-center gap-2 p-3 text-sm font-medium text-brand-600">
-                  <Plus className="size-4" /> Nuevo trámite
+                  <Plus className="size-4" /> Agregar producto
                 </summary>
                 <form action={createTramite.bind(null, l.id)} className="space-y-2 border-t border-line p-3">
-                  <Select name="tipo" defaultValue={l.tramite_type ?? TRAMITE_TYPES[0]}>
-                    {[...new Set([...(l.tramite_type ? [l.tramite_type] : []), ...TRAMITE_TYPES])].map((t) => (
+                  <Select name="tipo" defaultValue={available[0]} required>
+                    {available.map((t) => (
                       <option key={t}>{t}</option>
                     ))}
+                  </Select>
+                  <Select name="status" defaultValue="pendiente">
+                    {Object.entries(TRAMITE_STATUSES)
+                      .filter(([v]) => !["resuelto", "rechazado", "cancelado"].includes(v))
+                      .map(([v, m]) => (
+                        <option key={v} value={v}>
+                          {m.label}
+                        </option>
+                      ))}
                   </Select>
                   <div className="grid grid-cols-2 gap-2">
                     <Input name="folio_imss" placeholder="Folio IMSS" />
@@ -205,7 +213,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </div>
                   <Textarea name="notes" rows={2} placeholder="Notas" />
                   <Button size="sm" className="w-full">
-                    Crear trámite
+                    Agregar producto
                   </Button>
                 </form>
               </details>

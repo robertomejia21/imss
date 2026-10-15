@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendText, isGreenApiConfigured } from "@/lib/whatsapp/green-api";
+import { addProductToLead } from "@/lib/products";
 import { chatIdFromPhone, normalizeMxPhone } from "@/lib/utils";
 import type { Lead } from "@/lib/types";
 
@@ -14,7 +15,10 @@ export const IntakeSchema = z.object({
   email: z.string().trim().email("Correo inválido").optional().or(z.literal("")),
   curp: z.string().trim().toUpperCase().optional().or(z.literal("")),
   nss: z.string().trim().optional().or(z.literal("")),
+  /** Un producto (compatibilidad); para varios usa "products" */
   tramite_type: z.string().trim().optional().or(z.literal("")),
+  /** Productos que le interesan (nombres del catálogo) */
+  products: z.array(z.string().trim().min(1)).default([]),
   message: z.string().trim().max(2000).optional().or(z.literal("")),
   source: z.string().default("formulario"),
   utm: z.record(z.string(), z.string()).default({}),
@@ -40,8 +44,8 @@ export async function upsertLeadFromIntake(input: z.output<typeof IntakeSchema>)
     email: input.email || null,
     curp: input.curp || null,
     nss: input.nss ? input.nss.replace(/\D/g, "") : null,
-    tramite_type: input.tramite_type || null,
   };
+  const products = [...new Set([...input.products, ...(input.tramite_type ? [input.tramite_type] : [])])];
 
   const { data: matches } = await db
     .from("leads")
@@ -73,10 +77,16 @@ export async function upsertLeadFromIntake(input: z.output<typeof IntakeSchema>)
     await db.from("activities").insert({ lead_id: lead.id, kind: "system", content: `Registro recibido por ${input.source}` });
   }
 
+  // Cada producto queda como "pidió información"; el agente lo marca como registrado al completar sus datos
+  for (const product of products) {
+    const r = await addProductToLead(db, lead.id, product, "interesado");
+    if (r.error) console.error("[intake] no se pudo agregar el producto", product, r.error);
+  }
+
   if (input.send_whatsapp && isGreenApiConfigured()) {
     const chatId = chatIdFromPhone(phone);
     const first = lead.full_name?.split(" ")[0] ?? "";
-    const text = `¡Hola ${first}! 👋 Recibimos tu registro (folio *${lead.folio}*). Soy el asistente virtual y te ayudaré a dar seguimiento a tu trámite. ¿Me confirmas qué trámite necesitas?`;
+    const text = `¡Hola ${first}! 👋 Recibimos tu registro (folio *${lead.folio}*). Soy el asistente virtual y te ayudaré a dar seguimiento a tu trámite. ${products.length ? `Vi que te interesa: *${products.join(", ")}*. ¿Te cuento cómo funciona?` : "¿Me confirmas qué trámite necesitas?"}`;
     try {
       const idMessage = await sendText(chatId, text);
       await db.from("leads").update({ wa_chat_id: chatId, last_message_at: new Date().toISOString() }).eq("id", lead.id);

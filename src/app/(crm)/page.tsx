@@ -140,7 +140,7 @@ export default async function DashboardPage() {
                   <Avatar name={displayName(l)} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-ink">{displayName(l)}</p>
-                    <p className="truncate text-xs text-muted">{l.tramite_type ?? "Trámite sin definir"}</p>
+                    <p className="truncate text-xs text-muted">{l.tramite_type ?? "Sin producto"}</p>
                   </div>
                   <span className="hidden sm:inline">
                     <LeadStatusBadge status={l.status} />

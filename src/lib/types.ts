@@ -11,7 +11,7 @@ export type LeadStatus =
 export type MessageType = "text" | "image" | "audio" | "document" | "video" | "location" | "other";
 export type MessageSender = "lead" | "ai" | "agent" | "system";
 export type DocumentStatus = "pendiente" | "procesando" | "valido" | "con_observaciones" | "invalido" | "error";
-export type TramiteStatus = "pendiente" | "en_proceso" | "en_espera_imss" | "resuelto" | "rechazado" | "cancelado";
+export type TramiteStatus = "interesado" | "pendiente" | "en_proceso" | "en_espera_imss" | "resuelto" | "rechazado" | "cancelado";
 
 export interface Lead {
   id: string;
@@ -87,6 +87,16 @@ export interface Tramite {
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  description: string;
+  offered_by_ai: boolean;
+  active: boolean;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface Activity {

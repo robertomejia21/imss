@@ -1,6 +1,8 @@
 import Image from "next/image";
 import { CheckCircle2 } from "lucide-react";
 import { RegistroForm } from "./registro-form";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getProducts } from "@/lib/products";
 
 export const metadata = { title: "Registro", description: "Te ayudamos con tu trámite del IMSS" };
 
@@ -11,6 +13,7 @@ export default async function RegistroPage({ searchParams }: PageProps<"/registr
   const utm = Object.fromEntries(
     UTM_KEYS.flatMap((k) => (typeof sp[k] === "string" ? [[k, sp[k] as string]] : [])),
   );
+  const products = (await getProducts(createAdminClient())).map((p) => p.name);
 
   return (
     <main className="min-h-screen bg-cream">
@@ -34,7 +37,7 @@ export default async function RegistroPage({ searchParams }: PageProps<"/registr
         <div className="rounded-2xl border border-line bg-paper p-6 shadow-lg sm:p-8">
           <h2 className="mb-1 text-lg font-semibold">Completa tu registro</h2>
           <p className="mb-6 text-sm text-muted">Toma menos de un minuto. Al terminar seguimos por WhatsApp.</p>
-          <RegistroForm utm={utm} />
+          <RegistroForm utm={utm} products={products} />
         </div>
       </div>
     </main>

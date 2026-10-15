@@ -103,7 +103,7 @@ x-api-key: <INTAKE_API_KEY>
 {
   "full_name": "Ana López",
   "phone": "5512345678",
-  "tramite_type": "Modalidad 40",
+  "products": ["Alta en IMSS", "Salario Topado"],
   "source": "facebook",
   "send_whatsapp": true
 }`}</pre>

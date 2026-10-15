@@ -62,7 +62,7 @@ export function Kanban({ leads }: { leads: CardLead[] }) {
                       <p className="text-sm font-medium text-ink">{displayName(l)}</p>
                       {l.needs_human && <span className="mt-1 size-2 shrink-0 rounded-full bg-amber-500" title="Requiere asesor" />}
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-muted">{l.tramite_type ?? "Trámite sin definir"}</p>
+                    <p className="mt-0.5 truncate text-xs text-muted">{l.tramite_type ?? "Sin producto"}</p>
                     <div className="mt-2 flex items-center gap-3 text-[11px] text-muted">
                       <span>{timeAgo(l.last_message_at ?? l.created_at)}</span>
                       {l.doc_count > 0 && (

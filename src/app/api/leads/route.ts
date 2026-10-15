@@ -6,7 +6,8 @@ import { IntakeSchema, upsertLeadFromIntake } from "@/lib/leads";
  *
  * POST /api/leads
  * Headers: x-api-key: <INTAKE_API_KEY>
- * Body: { full_name, phone, email?, curp?, nss?, tramite_type?, message?, source?, utm?, extra?, send_whatsapp? }
+ * Body: { full_name, phone, email?, curp?, nss?, products?: string[], tramite_type?, message?, source?, utm?, extra?, send_whatsapp? }
+ * "products": nombres del catálogo (/productos); cada uno queda como "pidió información".
  */
 export async function POST(request: Request) {
   const key = process.env.INTAKE_API_KEY;

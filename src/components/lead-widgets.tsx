@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, ExternalLink, X } from "lucide-react";
+import { Check, ExternalLink, Landmark, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
+import { recheckPaymentWithBanxico, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
 import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
 import { Button, Select } from "./ui";
 import { DocStatusBadge } from "./status-badge";
@@ -32,6 +32,13 @@ export function StatusSelect({ leadId, status }: { leadId: string; status: LeadS
   );
 }
 
+const BANXICO: Record<string, { label: string; tone: string }> = {
+  confirmado: { label: "Confirmado en Banxico", tone: "bg-emerald-50 text-emerald-700" },
+  no_coincide: { label: "Banxico: no coincide", tone: "bg-red-50 text-red-700" },
+  no_encontrado: { label: "No aparece en Banxico", tone: "bg-amber-50 text-amber-800" },
+  no_verificado: { label: "Sin verificar en Banxico", tone: "bg-stone-100 text-stone-600" },
+};
+
 const FIELD_LABELS: Record<string, string> = {
   nombre_completo: "Nombre",
   curp: "CURP",
@@ -58,6 +65,9 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
 
   const fields = Object.entries(FIELD_LABELS).filter(([k]) => ex[k]);
   const others = (ex.otros_datos as { campo: string; valor: string }[] | undefined) ?? [];
+  const isReceipt = doc.doc_type === "comprobante_pago";
+  const banxico = ex.banxico as { estado: string; detalle: string; consultado_en: string } | undefined;
+  const [bxMsg, setBxMsg] = useState<string | null>(null);
 
   return (
     <div className="rounded-lg border border-line p-3">
@@ -98,6 +108,13 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
         </dl>
       )}
       {doc.review_notes && <p className="mt-2 text-xs text-muted">Nota del asesor: {doc.review_notes}</p>}
+      {isReceipt && banxico && BANXICO[banxico.estado] && (
+        <p className={`mt-2 rounded-md px-2 py-1 text-xs ${BANXICO[banxico.estado]!.tone}`} title={banxico.detalle}>
+          <Landmark className="mr-1 inline size-3.5" />
+          {BANXICO[banxico.estado]!.label} · {formatDateTime(banxico.consultado_en)}
+        </p>
+      )}
+      {bxMsg && <p className="mt-1 text-xs text-muted">{bxMsg}</p>}
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         <Button size="sm" variant="secondary" onClick={openFile}>
@@ -106,6 +123,22 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
         {fields.length + others.length > 0 && (
           <Button size="sm" variant="ghost" onClick={() => setOpen((o) => !o)}>
             {open ? "Ocultar datos" : "Datos OCR"}
+          </Button>
+        )}
+        {isReceipt && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            title="Consultar el CEP en banxico.org.mx/cep"
+            onClick={() =>
+              start(async () => {
+                const r = await recheckPaymentWithBanxico(doc.id);
+                setBxMsg(r.error ?? `${r.estado}: ${r.detalle}`);
+              })
+            }
+          >
+            <Landmark className="size-3.5" /> {pending ? "Consultando…" : "Verificar en Banxico"}
           </Button>
         )}
         <span className="flex-1" />

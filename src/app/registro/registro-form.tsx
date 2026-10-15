@@ -3,10 +3,9 @@
 import { useActionState } from "react";
 import { Loader2 } from "lucide-react";
 import { submitRegistro } from "./actions";
-import { Button, Field, Input, Select, Textarea } from "@/components/ui";
-import { TRAMITE_TYPES } from "@/lib/constants";
+import { Button, Field, Input, Textarea } from "@/components/ui";
 
-export function RegistroForm({ utm }: { utm: Record<string, string> }) {
+export function RegistroForm({ utm, products }: { utm: Record<string, string>; products: string[] }) {
   const [state, action, pending] = useActionState(submitRegistro, undefined);
   const err = (k: string) => state?.errors?.[k]?.[0];
 
@@ -25,16 +24,22 @@ export function RegistroForm({ utm }: { utm: Record<string, string> }) {
         <Input name="phone" required inputMode="tel" autoComplete="tel" placeholder="10 dígitos" />
         {err("phone") && <p className="mt-1 text-xs text-red-600">{err("phone")}</p>}
       </Field>
-      <Field label="¿Qué trámite necesitas? *">
-        <Select name="tramite_type" required defaultValue="">
-          <option value="" disabled>
-            Selecciona una opción
-          </option>
-          {TRAMITE_TYPES.map((t) => (
-            <option key={t}>{t}</option>
+      <fieldset>
+        <legend className="mb-1.5 text-sm font-medium text-ink">¿Qué te interesa? *</legend>
+        <p className="mb-2 text-xs text-muted">Puedes elegir más de uno.</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {products.map((p) => (
+            <label
+              key={p}
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-line px-3 py-2.5 text-sm has-[:checked]:border-brand-600 has-[:checked]:bg-brand-50"
+            >
+              <input type="checkbox" name="products" value={p} className="size-4 accent-brand-600" />
+              {p}
+            </label>
           ))}
-        </Select>
-      </Field>
+        </div>
+        {err("products") && <p className="mt-1 text-xs text-red-600">{err("products")}</p>}
+      </fieldset>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="CURP (opcional)">
           <Input name="curp" maxLength={18} className="uppercase" />

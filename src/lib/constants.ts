@@ -23,7 +23,8 @@ export const DOCUMENT_STATUSES: Record<DocumentStatus, { label: string; tone: st
 };
 
 export const TRAMITE_STATUSES: Record<TramiteStatus, { label: string; tone: string }> = {
-  pendiente: { label: "Pendiente", tone: "bg-stone-100 text-stone-600 ring-stone-500/20" },
+  interesado: { label: "Pidió información", tone: "bg-indigo-50 text-indigo-700 ring-indigo-600/20" },
+  pendiente: { label: "Registrado", tone: "bg-brand-50 text-brand-700 ring-brand-600/20" },
   en_proceso: { label: "En proceso", tone: "bg-sky-50 text-sky-700 ring-sky-600/20" },
   en_espera_imss: { label: "En espera IMSS", tone: "bg-amber-50 text-amber-800 ring-amber-600/20" },
   resuelto: { label: "Resuelto", tone: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
@@ -45,6 +46,7 @@ export const DOC_TYPES: Record<string, string> = {
   otro: "Otro",
 };
 
+/** Catálogo por omisión, si la tabla "products" aún no existe (ver supabase/migrations/0004_productos.sql). */
 export const TRAMITE_TYPES = [
   "Alta en IMSS",
   "Pensión por cesantía / vejez",

@@ -7,8 +7,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
 import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
 import { isValidCurp, isValidNss } from "@/lib/utils";
-import { TRAMITE_TYPES } from "@/lib/constants";
-import type { AgentSettings, DocumentRow, Lead, LeadStatus, Message, Tramite } from "@/lib/types";
+import { addProductToLead, getProducts, isOpenTramite } from "@/lib/products";
+import { TRAMITE_STATUSES } from "@/lib/constants";
+import type { AgentSettings, DocumentRow, Lead, LeadStatus, Message, Product, Tramite } from "@/lib/types";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -27,7 +28,6 @@ const SaveLeadInput = z.object({
   rfc: z.string().optional(),
   email: z.string().optional(),
   birth_date: z.string().optional(),
-  tramite_type: z.string().optional(),
   extra: z.record(z.string(), z.string()).optional(),
 });
 
@@ -37,13 +37,18 @@ const SetStatusInput = z.object({
 });
 
 const HumanInput = z.object({ reason: z.string() });
+const ProductInput = z.object({
+  producto: z.string().min(1),
+  estado: z.enum(["interesado", "registrado"]),
+  notas: z.string().optional(),
+});
 const SlipInput = z.object({
   plan: z.enum(["medico", "pension"]),
   infonavit: z.boolean().optional(),
   afore: z.boolean().optional(),
 });
 
-const tools: Anthropic.Beta.BetaTool[] = [
+const buildTools = (products: Product[]): Anthropic.Beta.BetaTool[] => [
   {
     name: "guardar_datos_lead",
     description:
@@ -57,7 +62,6 @@ const tools: Anthropic.Beta.BetaTool[] = [
         rfc: { type: "string" },
         email: { type: "string" },
         birth_date: { type: "string", description: "Fecha de nacimiento YYYY-MM-DD" },
-        tramite_type: { type: "string", description: `Trámite que necesita. Opciones habituales: ${TRAMITE_TYPES.join(", ")}` },
         extra: {
           type: "object",
           description: "Otros datos relevantes (clave: valor), por ejemplo semanas cotizadas, último patrón, ciudad",
@@ -67,9 +71,25 @@ const tools: Anthropic.Beta.BetaTool[] = [
     },
   },
   {
+    name: "registrar_producto",
+    description:
+      "Registra en el CRM un producto (servicio) que le interesa al prospecto. Una persona puede tener varios: llama esta herramienta una vez por producto. " +
+      'Usa estado "interesado" en cuanto pida información de un producto, y "registrado" cuando ya dio los datos que ese producto necesita y quiere contratarlo. ' +
+      "Si el producto ya estaba en su expediente no se duplica.",
+    input_schema: {
+      type: "object",
+      properties: {
+        producto: { type: "string", enum: products.map((p) => p.name), description: "Nombre exacto del producto del catálogo" },
+        estado: { type: "string", enum: ["interesado", "registrado"] },
+        notas: { type: "string", description: "Detalle breve para el asesor (p. ej. paquete elegido), opcional" },
+      },
+      required: ["producto", "estado"],
+    },
+  },
+  {
     name: "actualizar_estado",
     description:
-      "Mueve al prospecto en el embudo del CRM. Usa 'registro_completo' cuando ya tengas nombre, CURP y tipo de trámite; 'documentos_pendientes' cuando falten documentos por enviar.",
+      "Mueve al prospecto en el embudo del CRM. Usa 'registro_completo' cuando ya tengas nombre, CURP y al menos un producto registrado; 'documentos_pendientes' cuando falten documentos por enviar.",
     input_schema: {
       type: "object",
       properties: {
@@ -113,7 +133,7 @@ const tools: Anthropic.Beta.BetaTool[] = [
   {
     name: "consultar_expediente",
     description:
-      "Consulta los trámites registrados del prospecto, su estado, y los documentos recibidos con su resultado de verificación.",
+      "Consulta los productos y trámites del prospecto con su estado, y los documentos recibidos con su resultado de verificación.",
     input_schema: { type: "object", properties: {} },
   },
 ];
@@ -156,6 +176,25 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
         });
       }
       return warnings.length ? `Guardado con advertencias: ${warnings.join(" ")}` : "Datos guardados correctamente.";
+    }
+
+    case "registrar_producto": {
+      const parsed = ProductInput.safeParse(input);
+      if (!parsed.success) return `Error: ${parsed.error.message}`;
+      const { producto, estado, notas } = parsed.data;
+      const r = await addProductToLead(db, lead.id, producto, estado === "registrado" ? "pendiente" : "interesado", { notes: notas });
+      if (r.error) return `Error al registrar el producto: ${r.error}`;
+      if (r.result !== "sin_cambios") {
+        await db.from("activities").insert({
+          lead_id: lead.id,
+          kind: "ai",
+          content: `IA ${r.result === "creado" ? "agregó" : "actualizó"} producto: ${producto} (${estado === "registrado" ? "registrado" : "pidió información"})`,
+        });
+      }
+      const status = r.tramite ? TRAMITE_STATUSES[r.tramite.status].label : estado;
+      return r.result === "sin_cambios"
+        ? `"${producto}" ya estaba en su expediente (${status}); no se duplicó.`
+        : `"${producto}" quedó en su expediente como: ${status}.`;
     }
 
     case "actualizar_estado": {
@@ -234,6 +273,7 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
         pago_paquete: slip.concept,
         pago_referencia: slip.reference,
       };
+      await addProductToLead(db, lead.id, "Alta en IMSS", "pendiente", { notes: `Paquete: ${slip.concept}` });
       const captured = { ...lead.captured_data, ...pago };
       await db.from("leads").update({ captured_data: captured }).eq("id", lead.id);
       lead.captured_data = captured;
@@ -258,9 +298,9 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
       ]);
       return JSON.stringify({
         estado_expediente: lead.status,
-        tramites: (tramites as Tramite[] | null)?.map((t) => ({
-          tipo: t.tipo,
-          estado: t.status,
+        productos: (tramites as Tramite[] | null)?.map((t) => ({
+          producto: t.tipo,
+          estado: TRAMITE_STATUSES[t.status]?.label ?? t.status,
           folio_imss: t.folio_imss,
           fecha_compromiso: t.due_date,
           notas: t.notes,
@@ -332,7 +372,7 @@ async function buildConversation(db: Db, leadId: string, limit: number) {
   return { conversation: out, lastMessage: messages[messages.length - 1] };
 }
 
-function leadContext(lead: Lead) {
+function leadContext(lead: Lead, tramites: Tramite[]) {
   const known = {
     folio: lead.folio,
     nombre_whatsapp: lead.wa_name,
@@ -342,7 +382,11 @@ function leadContext(lead: Lead) {
     rfc: lead.rfc,
     email: lead.email,
     fecha_nacimiento: lead.birth_date,
-    tramite: lead.tramite_type,
+    productos: tramites.filter(isOpenTramite).map((t) => ({
+      producto: t.tipo,
+      estado: t.status === "interesado" ? "pidió información" : t.status === "pendiente" ? "registrado" : TRAMITE_STATUSES[t.status].label,
+      notas: t.notes ?? undefined,
+    })),
     estado_en_crm: lead.status,
     origen: lead.source,
     datos_formulario: Object.keys(lead.form_data ?? {}).length ? lead.form_data : undefined,
@@ -350,6 +394,23 @@ function leadContext(lead: Lead) {
   };
   const now = new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City", dateStyle: "full", timeStyle: "short" });
   return `Fecha y hora actual (CDMX): ${now}\n\nDatos que ya tenemos de este contacto (null = falta):\n${JSON.stringify(known, null, 2)}`;
+}
+
+/** Catálogo vigente: lo que el agente ofrece y lo que solo registra para un asesor. */
+function productCatalog(products: Product[]) {
+  const offered = products.filter((p) => p.offered_by_ai);
+  const others = products.filter((p) => !p.offered_by_ai);
+  const line = (p: Product) => `- **${p.name}**${p.description.trim() ? `: ${p.description.trim()}` : ""}`;
+  return [
+    "# Catálogo de productos vigente",
+    "Una persona puede pedir información y registrarse en **varios productos**. Registra cada uno con `registrar_producto`.",
+    "",
+    "Productos que ofreces tú. Si alguno no tiene un flujo propio en estas instrucciones, guíate por su descripción: captura nombre completo, CURP y lo que pida la descripción, regístralo y dile que un asesor le dará seguimiento.",
+    ...offered.map(line),
+    ...(others.length
+      ? ["", 'Otros productos que se manejan con un asesor: si le interesan, regístralos como "interesado", guarda sus datos y pasa el caso a un asesor.', ...others.map(line)]
+      : []),
+  ].join("\n");
 }
 
 // =============================================================
@@ -361,13 +422,19 @@ export async function generateReply(db: Db, lead: Lead, settings: AgentSettings)
   // Solo respondemos si el último mensaje es del usuario
   if (!lastMessage || lastMessage.direction !== "in" || conversation.length === 0) return null;
 
+  const [products, { data: tramites }] = await Promise.all([
+    getProducts(db),
+    db.from("tramites").select("*").eq("lead_id", lead.id).order("created_at"),
+  ]);
+  const tools = buildTools(products);
+
   const system: Anthropic.Beta.BetaTextBlockParam[] = [
     {
       type: "text",
-      text: `${settings.system_prompt?.trim() || DEFAULT_AGENT_PROMPT}\n\nTu nombre es ${settings.agent_name}.\n\n${OPERATIONAL_CONTEXT}`,
+      text: `${settings.system_prompt?.trim() || DEFAULT_AGENT_PROMPT}\n\nTu nombre es ${settings.agent_name}.\n\n${productCatalog(products)}\n\n${OPERATIONAL_CONTEXT}`,
       cache_control: { type: "ephemeral" }, // instrucciones + herramientas quedan en caché
     },
-    { type: "text", text: leadContext(lead) },
+    { type: "text", text: leadContext(lead, (tramites as Tramite[] | null) ?? []) },
   ];
 
   const messages = [...conversation];
