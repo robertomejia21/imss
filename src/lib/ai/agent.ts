@@ -1,8 +1,11 @@
 import "server-only";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
-import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT } from "./prompt";
+import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT, PRIVACY_URL_PLACEHOLDER } from "./prompt";
+import { privacyUrl } from "@/lib/company";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
 import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
@@ -16,6 +19,9 @@ type Db = ReturnType<typeof createAdminClient>;
 const MAX_TOOL_ROUNDS = 6;
 const LOCK_SECONDS = 120;
 const SLIP_URL_SECONDS = 7 * 24 * 3600; // el enlace del PDF debe durar lo suficiente para que Green API lo descargue
+// Formato en blanco que firma el trabajador de IMSS-Bienestar (préstamo vía nómina)
+const AUTORIZACION_TEMPLATE = path.join(process.cwd(), "src/lib/templates/autorizacion-consulta-nomipay.pdf");
+const AUTORIZACION_STORAGE = "formatos/autorizacion-consulta-nomipay.pdf";
 
 // =============================================================
 // Herramientas del agente
@@ -129,6 +135,13 @@ const buildTools = (products: Product[]): Anthropic.Beta.BetaTool[] => [
       },
       required: ["plan"],
     },
+  },
+  {
+    name: "enviar_formato_autorizacion",
+    description:
+      "Envía por WhatsApp, en PDF, el formato en blanco de 'Autorización de consulta y reserva en plataforma Nomi-Pay' para el préstamo vía nómina " +
+      "(solo trabajadores activos de IMSS-Bienestar que ya aceptaron el aviso de privacidad). Después explícale cómo llenarlo y que te regrese una foto.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "consultar_expediente",
@@ -291,6 +304,37 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
       ].join(" ");
     }
 
+    case "enviar_formato_autorizacion": {
+      if (!lead.wa_chat_id) return "No se envió el formato: el prospecto no tiene chat de WhatsApp vinculado.";
+      const pdf = await readFile(AUTORIZACION_TEMPLATE);
+      const { error: upErr } = await db.storage
+        .from("media")
+        .upload(AUTORIZACION_STORAGE, pdf, { contentType: "application/pdf", upsert: true });
+      if (upErr) return `Error al preparar el formato: ${upErr.message}`;
+      const { data: signed, error: signErr } = await db.storage.from("media").createSignedUrl(AUTORIZACION_STORAGE, SLIP_URL_SECONDS);
+      if (signErr || !signed) return `Error al generar el enlace del formato: ${signErr?.message ?? "sin URL"}`;
+
+      const fileName = "Autorizacion-de-consulta-Nomipay.pdf";
+      const idMessage = await sendFileByUrl(lead.wa_chat_id, signed.signedUrl, fileName);
+      await db.from("messages").insert({
+        lead_id: lead.id,
+        direction: "out",
+        sender: "ai",
+        type: "document",
+        body: "Formato de autorización de consulta (Nomi-Pay)",
+        media_path: AUTORIZACION_STORAGE,
+        media_mime: "application/pdf",
+        wa_message_id: idMessage,
+        status: "sent",
+        meta: { fileName, kind: "formato_autorizacion" },
+      });
+      const captured = { ...lead.captured_data, prestamo_formato_enviado: new Date().toISOString().slice(0, 10) };
+      await db.from("leads").update({ captured_data: captured }).eq("id", lead.id);
+      lead.captured_data = captured;
+      await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: "IA envió el formato de autorización de consulta (Nomi-Pay)" });
+      return "Formato enviado por WhatsApp como PDF. Explícale cómo llenarlo y que te mande una foto clara del formato firmado.";
+    }
+
     case "consultar_expediente": {
       const [{ data: tramites }, { data: docs }] = await Promise.all([
         db.from("tramites").select("*").eq("lead_id", lead.id).order("created_at"),
@@ -431,7 +475,7 @@ export async function generateReply(db: Db, lead: Lead, settings: AgentSettings)
   const system: Anthropic.Beta.BetaTextBlockParam[] = [
     {
       type: "text",
-      text: `${settings.system_prompt?.trim() || DEFAULT_AGENT_PROMPT}\n\nTu nombre es ${settings.agent_name}.\n\n${productCatalog(products)}\n\n${OPERATIONAL_CONTEXT}`,
+      text: `${(settings.system_prompt?.trim() || DEFAULT_AGENT_PROMPT).replaceAll(PRIVACY_URL_PLACEHOLDER, privacyUrl())}\n\nTu nombre es ${settings.agent_name}.\n\n${productCatalog(products)}\n\n${OPERATIONAL_CONTEXT}`,
       cache_control: { type: "ephemeral" }, // instrucciones + herramientas quedan en caché
     },
     { type: "text", text: leadContext(lead, (tramites as Tramite[] | null) ?? []) },

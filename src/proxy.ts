@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Rutas públicas: login, formulario de registro, webhooks y API de captación.
-const PUBLIC_PATHS = ["/login", "/registro", "/api/webhooks", "/api/leads", "/api/health", "/auth"];
+const PUBLIC_PATHS = ["/login", "/registro", "/aviso-de-privacidad", "/api/webhooks", "/api/leads", "/api/health", "/auth"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });

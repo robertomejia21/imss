@@ -63,7 +63,11 @@ export function RegistroForm({ utm, products }: { utm: Record<string, string>; p
 
       <label className="flex items-start gap-2 text-xs text-muted">
         <input type="checkbox" name="privacy" className="mt-0.5 size-4 accent-brand-600" required />
-        <span>Acepto el aviso de privacidad y que me contacten por WhatsApp para dar seguimiento a mi trámite.</span>
+        <span>Acepto el{" "}
+          <a href="/aviso-de-privacidad" target="_blank" className="font-medium text-brand-700 underline">
+            aviso de privacidad
+          </a>{" "}
+          y que me contacten por WhatsApp para dar seguimiento a mi trámite.</span>
       </label>
       {err("privacy") && <p className="text-xs text-red-600">{err("privacy")}</p>}
       {state?.error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{state.error}</p>}

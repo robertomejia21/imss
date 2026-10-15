@@ -270,6 +270,14 @@ export async function processMedia(messageId: string) {
             if (!lead.captured_data?.clave_elector && ocr.clave_elector) extra.clave_elector = ocr.clave_elector.toUpperCase();
             if (Object.keys(extra).length) fill.captured_data = { ...lead.captured_data, ...extra };
           }
+          // Talón de nómina o pensión (préstamo vía nómina)
+          if (ocr.tipo_documento === "talon_pago" && ocr.talon) {
+            const extra: Record<string, string> = {};
+            if (!lead.captured_data?.prestamo_numero_empleado && ocr.talon.numero_empleado) extra.prestamo_numero_empleado = ocr.talon.numero_empleado;
+            if (ocr.talon.emisor) extra.prestamo_emisor_talon = ocr.talon.emisor;
+            if (ocr.talon.importe_neto != null) extra.prestamo_neto_talon = String(ocr.talon.importe_neto);
+            if (Object.keys(extra).length) fill.captured_data = { ...lead.captured_data, ...extra };
+          }
           if (Object.keys(fill).length) await db.from("leads").update(fill).eq("id", lead.id);
         }
         await db.from("activities").insert({

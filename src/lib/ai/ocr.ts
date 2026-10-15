@@ -38,6 +38,27 @@ const PagoSchema = z.object({
   ordenante: z.string().nullable().describe("Nombre de quien pagó"),
 });
 
+const TalonSchema = z.object({
+  tipo: z.enum(["nomina", "pension", "jubilacion", "otro"]).describe("¿Es talón de nómina, de pensión o de jubilación?"),
+  emisor: z.string().nullable().describe('Quién paga, tal como aparece en "Nombre del emisor" o el encabezado (ej. IMSS-BIENESTAR, IMSS)'),
+  unidad_administrativa: z.string().nullable(),
+  numero_empleado: z.string().nullable().describe("No. de empleado o matrícula"),
+  regimen_contratacion: z.string().nullable().describe("Ej. BASE, CONFIANZA, EVENTUAL"),
+  puesto: z.string().nullable(),
+  periodo: z.string().nullable().describe("Periodo de pago tal como aparece"),
+  fecha_pago: z.string().nullable().describe("Fecha de pago, formato YYYY-MM-DD"),
+  total_percepciones: z.number().nullable(),
+  total_descuentos: z.number().nullable(),
+  importe_neto: z.number().nullable(),
+});
+
+const AutorizacionSchema = z.object({
+  tiene_firma_trabajador: z.boolean().describe("¿Hay una firma manuscrita en el renglón 'Firma del trabajador'?"),
+  nombre_trabajador: z.string().nullable(),
+  numero_empleado_rfc: z.string().nullable(),
+  fecha: z.string().nullable().describe("Fecha escrita en el formato, tal como aparece"),
+});
+
 const FotoSchema = z.object({
   rostro_visible: z.boolean().describe("¿Se ve el rostro completo, de frente, sin lentes oscuros, gorra ni cubrebocas?"),
   una_sola_persona: z.boolean().describe("¿Aparece una sola persona?"),
@@ -66,6 +87,8 @@ export const OcrSchema = z.object({
   vigencia: z.string().nullable().describe("Año o fecha de vigencia tal como aparece"),
   pago: PagoSchema.nullable().describe("Solo para comprobantes de pago o transferencia; null en cualquier otro documento"),
   foto: FotoSchema.nullable().describe("Solo para foto_persona (foto de una persona, no de un documento); null en cualquier otro caso"),
+  talon: TalonSchema.nullable().describe("Solo para talon_pago; null en cualquier otro documento"),
+  autorizacion: AutorizacionSchema.nullable().describe("Solo para formato_autorizacion; null en cualquier otro documento"),
   otros_datos: z.array(z.object({ campo: z.string(), valor: z.string() })),
   observaciones: z.array(z.string()).describe("Problemas detectados, en español, dirigidos al asesor"),
   confianza: z.number().describe("0 a 1: confianza general de la extracción"),
@@ -80,8 +103,8 @@ Analiza el documento adjunto y extrae sus datos con precisión, carácter por ca
 - Para INE/credencial, indica si la foto muestra el frente, el reverso o ambos, y la vigencia.
 - Si es un comprobante de pago, transferencia (SPEI), depósito o ticket bancario: tipo_documento = "comprobante_pago", llena "pago" con monto, fecha, cuentas, clave de rastreo, concepto y ordenante, y deja nombre_completo, curp y nss en null. Revisa con cuidado señales de edición (tipografías distintas, cifras desalineadas, recortes).
 - Si es la foto de una persona (selfie o retrato, no un documento ni una INE): tipo_documento = "foto_persona", llena "foto" y deja los datos personales en null. es_documento_oficial = true si es una foto real de la persona (no captura de pantalla, foto de otra foto ni imagen de internet).
-- Si es un talón o recibo de pago de nómina, de pensión o de jubilación: tipo_documento = "talon_pago"; en nombre_completo el trabajador o pensionado, curp/nss/rfc si aparecen, y en otros_datos la dependencia o institución que paga, el periodo, la percepción neta, la matrícula o número de empleado y la delegación si aparecen.
-- Si es un formato o carta de autorización (por ejemplo para consultar capacidad de descuento) llenado por el cliente: tipo_documento = "formato_autorizacion"; en nombre_completo el nombre escrito y en otros_datos si tiene firma ("firma: sí/no") y la fecha.
+- Si es un talón o recibo de pago de nómina, de pensión o de jubilación (por ejemplo el "Comprobante de percepciones y descuentos de nómina" de IMSS-Bienestar, que es un CFDI): tipo_documento = "talon_pago"; en nombre_completo el trabajador o pensionado, curp/nss/rfc tal como aparecen, y llena "talon" (emisor, unidad administrativa, número de empleado, régimen de contratación, puesto, periodo, fecha de pago, total de percepciones, total de descuentos e importe neto). En otros_datos pon la delegación o entidad si aparece.
+- Si es un formato o carta de autorización llenado por el cliente (por ejemplo la "Autorización de consulta y reserva en plataforma Nomi-Pay"): tipo_documento = "formato_autorizacion"; en nombre_completo el nombre del trabajador escrito y llena "autorizacion" (si tiene firma del trabajador, nombre, número de empleado o RFC y fecha). Los renglones del promotor y el folio pueden venir vacíos: es normal.
 - Si es una selfie de la persona sosteniendo su INE: tipo_documento = "selfie_ine"; es_documento_oficial = true si es una foto real donde se ven el rostro y la INE original; en observaciones anota si la INE no se lee o el rostro no coincide con la foto de la INE.
 - Si es un estado de cuenta bancario: tipo_documento = "estado_cuenta"; en nombre_completo pon el titular y en otros_datos el banco y la CLABE o número de cuenta tal como aparecen.
 - En "observaciones" anota problemas útiles para el asesor: foto borrosa, reflejos, documento vencido, recortado, datos ilegibles, posibles alteraciones, etc.`;
@@ -136,6 +159,23 @@ export function evaluateDocument(
     issues.push(`El NSS del documento no coincide con el registrado (${lead.nss})`);
   if (ocr.nombre_completo && lead.full_name && !namesMatch(ocr.nombre_completo, lead.full_name))
     issues.push(`El nombre del documento (${ocr.nombre_completo}) no coincide con el registrado (${lead.full_name})`);
+
+  if (ocr.tipo_documento === "talon_pago") {
+    const t = ocr.talon;
+    if (!t) issues.push("No se pudieron leer los datos del talón");
+    else {
+      if (!t.fecha_pago) issues.push("No se pudo leer la fecha de pago del talón");
+      else if (/^\d{4}-\d{2}-\d{2}/.test(t.fecha_pago) && Date.now() - new Date(t.fecha_pago).getTime() > 62 * 86_400_000)
+        issues.push(`El talón no es reciente (fecha de pago ${t.fecha_pago}); se necesita el último`);
+      const perfil = lead.captured_data?.prestamo_perfil;
+      if (perfil === "activo_imss_bienestar" && t.emisor && !/BIENESTAR/i.test(t.emisor))
+        issues.push(`El talón lo emite ${t.emisor}, no IMSS-Bienestar`);
+    }
+  }
+  if (ocr.tipo_documento === "formato_autorizacion") {
+    if (!ocr.autorizacion?.tiene_firma_trabajador) issues.push("El formato de autorización no tiene la firma del trabajador");
+    if (!ocr.autorizacion?.nombre_trabajador && !ocr.nombre_completo) issues.push("El formato de autorización no tiene el nombre del trabajador");
+  }
 
   if (ocr.tipo_documento === "ine" && ocr.vigencia) {
     const year = Number(ocr.vigencia.match(/\d{4}/g)?.pop());
@@ -250,6 +290,14 @@ export function ocrSummaryForAgent(ocr: OcrResult, status: DocumentStatus, issue
     ["Fecha de nacimiento", ocr.fecha_nacimiento],
     ["Domicilio", ocr.domicilio],
     ["Vigencia", ocr.vigencia],
+    ["Emisor del talón", ocr.talon?.emisor],
+    ["No. de empleado", ocr.talon?.numero_empleado],
+    ["Régimen de contratación", ocr.talon?.regimen_contratacion],
+    ["Periodo", ocr.talon?.periodo],
+    ["Fecha de pago", ocr.talon?.fecha_pago],
+    ["Importe neto", ocr.talon?.importe_neto != null ? formatMxn(ocr.talon.importe_neto) : null],
+    ["Firma del trabajador", ocr.autorizacion ? (ocr.autorizacion.tiene_firma_trabajador ? "sí" : "NO") : null],
+    ["No. de empleado / RFC (formato)", ocr.autorizacion?.numero_empleado_rfc],
     ...ocr.otros_datos.map((d) => [d.campo, d.valor]),
   ]
     .filter(([, v]) => v)
