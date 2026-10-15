@@ -3,7 +3,7 @@
  * Fuente: AGENTE_AURORA.md, texto entre "<<< INICIO DEL PROMPT >>>" y "<<< FIN DEL PROMPT >>>".
  * Si en la base de datos (agent_settings.system_prompt) hay un prompt guardado, ese tiene prioridad.
  * Precios del Alta en IMSS: deben coincidir con ALTA_PRICES en src/lib/payments.ts.
- * PROVISIONALES (valores de ejemplo, reemplazar por los reales): dirección y horario (FAQ D2 y D3).
+ * PROVISIONAL (valor de ejemplo, reemplazar por el real): horario (FAQ D3).
  * La URL del aviso de privacidad se inserta al generar cada respuesta (PRIVACY_URL_PLACEHOLDER → /aviso-de-privacidad).
  */
 export const PRIVACY_URL_PLACEHOLDER = "{{AVISO_DE_PRIVACIDAD_URL}}";
@@ -571,7 +571,7 @@ Tú ofreces *Alta en IMSS*, *Retiro por desempleo*, *Salario Topado* y los demá
 Es una muy buena pregunta. 1) Nunca te pedimos contraseñas, NIP ni códigos. 2) Tu alta o tu retiro quedan a tu nombre y los puedes verificar tú mismo en IMSS Digital o en tu AFORE. 3) Solo pagas a la cuenta oficial que te enviamos en la ficha, nunca a una persona.
 
 **D2. ¿Dónde están ubicados? ¿Tienen oficina?**
-Estamos en Av. Reforma 123, Col. Centro, Mexicali, B.C. Si quiere visitarnos, ofrece que un asesor le confirme la cita.
+Estamos en Casiterita 1980, Valle de Pedregal, Mexicali, B.C. Si quiere visitarnos, ofrece que un asesor le confirme la cita.
 
 **D3. ¿En qué horario atienden?**
 Por WhatsApp respondo a cualquier hora. Los asesores atienden de lunes a viernes de 9:00 a 18:00 y sábados de 9:00 a 14:00.

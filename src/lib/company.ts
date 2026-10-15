@@ -1,12 +1,11 @@
 /**
  * Datos del responsable para el aviso de privacidad y los mensajes del agente.
- * Domicilio y correo de privacidad se configuran con variables de entorno
- * (COMPANY_ADDRESS, PRIVACY_EMAIL); mientras falten, el aviso remite al WhatsApp.
+ * Domicilio y correo se pueden cambiar con variables de entorno (COMPANY_ADDRESS, PRIVACY_EMAIL).
  */
 export const COMPANY = {
   name: process.env.PAYMENT_BUSINESS_NAME ?? "L&S Consultores Asociados AC",
-  address: process.env.COMPANY_ADDRESS?.trim() || null,
-  privacyEmail: process.env.PRIVACY_EMAIL?.trim() || null,
+  address: process.env.COMPANY_ADDRESS?.trim() || "Casiterita 1980, Valle de Pedregal, Mexicali, Baja California",
+  privacyEmail: process.env.PRIVACY_EMAIL?.trim() || "leonardoimss2020@gmail.com",
   whatsapp: process.env.NEXT_PUBLIC_WHATSAPP_NUMBER?.trim() || null,
 };
 
