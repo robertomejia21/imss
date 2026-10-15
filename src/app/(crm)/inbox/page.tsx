@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, MessagesSquare, Search } from "lucide-react";
+import { Bot, MessagesSquare, Search, UserRound } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { ChatPanel } from "@/components/chat-panel";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
@@ -123,7 +123,11 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
                     <span className="shrink-0 text-[11px] text-muted">{timeAgo(l.last_message_at)}</span>
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5">
-                    {!l.ai_enabled && <Bot className="size-3.5 shrink-0 text-stone-400" aria-label="IA en pausa" />}
+                    {l.ai_enabled ? (
+                      <Bot className="size-3.5 shrink-0 text-brand-600" aria-label="Atiende la IA" />
+                    ) : (
+                      <UserRound className="size-3.5 shrink-0 text-stone-500" aria-label="Atiende un asesor" />
+                    )}
                     <p className="flex-1 truncate text-xs text-muted">{preview(previews.get(l.id))}</p>
                     {l.needs_human && <span className="size-2 shrink-0 rounded-full bg-amber-500" title="Requiere asesor" />}
                     {l.unread_count > 0 && (

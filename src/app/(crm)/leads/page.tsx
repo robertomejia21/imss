@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bot, Plus, Search, Users } from "lucide-react";
+import { Bot, Plus, Search, UserRound, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createLead } from "../actions";
 import { Avatar, Button, Card, EmptyState, Field, Input, PageHeader, Select } from "@/components/ui";
@@ -113,7 +113,11 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                         <div>
                           <p className="flex items-center gap-1.5 font-medium text-ink">
                             {displayName(l)}
-                            {!l.ai_enabled && <Bot className="size-3.5 text-stone-400" aria-label="IA en pausa" />}
+                            {l.ai_enabled ? (
+                              <Bot className="size-3.5 text-brand-600" aria-label="Atiende la IA" />
+                            ) : (
+                              <UserRound className="size-3.5 text-stone-500" aria-label="Atiende un asesor" />
+                            )}
                             {l.needs_human && <span className="size-2 rounded-full bg-amber-500" title="Requiere asesor" />}
                           </p>
                           <p className="text-xs text-muted">

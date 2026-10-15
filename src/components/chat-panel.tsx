@@ -267,7 +267,7 @@ export function ChatPanel({
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted">
           <Bot className={cn("size-4", lead.ai_enabled ? "text-brand-600" : "text-stone-400")} />
-          IA {lead.ai_enabled ? "activa" : "en pausa"}
+          IA
           <input
             type="checkbox"
             className="peer sr-only"
