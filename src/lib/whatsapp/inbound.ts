@@ -2,7 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadMedia, getDownloadUrl, type GreenWebhook } from "./green-api";
 import { transcribeAudio } from "@/lib/ai/transcribe";
-import { evaluateDocument, extractDocument, isOcrSupported, ocrSummaryForAgent } from "@/lib/ai/ocr";
+import { evaluateDocument, extractDocument, isOcrSupported, ocrDato, ocrSummaryForAgent } from "@/lib/ai/ocr";
 import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico, type BanxicoCheck } from "@/lib/payment-verification";
 import { phoneFromChatId } from "@/lib/utils";
 import type { DocumentStatus, Lead, Message, MessageType } from "@/lib/types";
@@ -271,11 +271,14 @@ export async function processMedia(messageId: string) {
             if (Object.keys(extra).length) fill.captured_data = { ...lead.captured_data, ...extra };
           }
           // Talón de nómina o pensión (préstamo vía nómina)
-          if (ocr.tipo_documento === "talon_pago" && ocr.talon) {
+          if (ocr.tipo_documento === "talon_pago") {
             const extra: Record<string, string> = {};
-            if (!lead.captured_data?.prestamo_numero_empleado && ocr.talon.numero_empleado) extra.prestamo_numero_empleado = ocr.talon.numero_empleado;
-            if (ocr.talon.emisor) extra.prestamo_emisor_talon = ocr.talon.emisor;
-            if (ocr.talon.importe_neto != null) extra.prestamo_neto_talon = String(ocr.talon.importe_neto);
+            const numEmpleado = ocrDato(ocr, "numero_empleado");
+            if (!lead.captured_data?.prestamo_numero_empleado && numEmpleado) extra.prestamo_numero_empleado = numEmpleado;
+            const emisor = ocrDato(ocr, "emisor");
+            if (emisor) extra.prestamo_emisor_talon = emisor;
+            const neto = ocrDato(ocr, "importe_neto");
+            if (neto) extra.prestamo_neto_talon = neto;
             if (Object.keys(extra).length) fill.captured_data = { ...lead.captured_data, ...extra };
           }
           if (Object.keys(fill).length) await db.from("leads").update(fill).eq("id", lead.id);
