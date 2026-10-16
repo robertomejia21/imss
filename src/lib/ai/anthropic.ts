@@ -1,7 +1,13 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 
-export const anthropic = new Anthropic(); // lee ANTHROPIC_API_KEY del entorno
+/**
+ * Lee ANTHROPIC_API_KEY del entorno. Las keys de usuario (sk-ant-usr-…) no están ligadas a un
+ * workspace: en ese caso hay que indicar cuál usar con ANTHROPIC_WORKSPACE_ID (wrkspc_…).
+ */
+const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+
+export const anthropic = new Anthropic(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {});
 
 export const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-5-5";
 
