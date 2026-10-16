@@ -6,6 +6,7 @@ import { z } from "zod";
 import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
 import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT, PRIVACY_URL_PLACEHOLDER } from "./prompt";
 import { privacyUrl } from "@/lib/company";
+import { authorizationData, createSigningLink, missingAuthorizationFields } from "@/lib/authorization-form";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
 import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
@@ -139,9 +140,14 @@ const buildTools = (products: Product[]): Anthropic.Beta.BetaTool[] => [
   {
     name: "enviar_formato_autorizacion",
     description:
-      "Envía por WhatsApp, en PDF, el formato en blanco de 'Autorización de consulta y reserva en plataforma Nomi-Pay' para el préstamo vía nómina " +
-      "(solo trabajadores activos de IMSS-Bienestar que ya aceptaron el aviso de privacidad). Después explícale cómo llenarlo y que te regrese una foto.",
-    input_schema: { type: "object", properties: {} },
+      "Formato 'Autorización de consulta y reserva en plataforma Nomi-Pay' del préstamo vía nómina (solo trabajadores activos de IMSS-Bienestar que ya aceptaron el aviso de privacidad). " +
+      "Por omisión genera un ENLACE donde el cliente ve el formato ya llenado con sus datos (fecha, nombre y número de empleado o RFC) y lo firma con el dedo; tú debes incluir ese enlace en tu respuesta. " +
+      "Requiere nombre completo y número de empleado o RFC (el número de empleado se toma solo del talón). " +
+      "Usa en_blanco=true solo si el cliente prefiere imprimirlo y firmarlo a mano: se envía el PDF en blanco.",
+    input_schema: {
+      type: "object",
+      properties: { en_blanco: { type: "boolean", description: "Enviar el PDF en blanco en vez del enlace de firma" } },
+    },
   },
   {
     name: "consultar_expediente",
@@ -306,6 +312,15 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
 
     case "enviar_formato_autorizacion": {
       if (!lead.wa_chat_id) return "No se envió el formato: el prospecto no tiene chat de WhatsApp vinculado.";
+      if (!(input as { en_blanco?: boolean })?.en_blanco) {
+        const missing = missingAuthorizationFields(authorizationData(lead));
+        if (missing.length) {
+          return `Aún no se puede llenar el formato: falta ${missing.join(" y ")}. Pídeselo (el número de empleado viene en su talón; si ya mandó el talón, usa su RFC) y guárdalo antes de volver a usar esta herramienta.`;
+        }
+        const url = await createSigningLink(db, lead);
+        await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: "IA envió el enlace para firmar el formato de autorización (Nomi-Pay)" });
+        return `Enlace de firma listo (vigente 7 días): ${url}\nInclúyelo tal cual en tu respuesta. Explícale que ahí ve su formato ya llenado con sus datos, lo revisa y lo firma con el dedo; al terminar le llega su copia por WhatsApp. No tiene que imprimir nada.`;
+      }
       const pdf = await readFile(AUTORIZACION_TEMPLATE);
       const { error: upErr } = await db.storage
         .from("media")

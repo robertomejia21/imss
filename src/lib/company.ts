@@ -11,8 +11,11 @@ export const COMPANY = {
 
 const PRODUCTION_URL = "https://imss-lac.vercel.app";
 
-/** URL pública del aviso de privacidad (la que el agente envía por WhatsApp). */
-export function privacyUrl() {
+/** URL pública de la app (la de producción si NEXT_PUBLIC_APP_URL no es https). */
+export function appUrl() {
   const base = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  return `${base?.startsWith("https://") ? base.replace(/\/$/, "") : PRODUCTION_URL}/aviso-de-privacidad`;
+  return base?.startsWith("https://") ? base.replace(/\/$/, "") : PRODUCTION_URL;
 }
+
+/** URL pública del aviso de privacidad (la que el agente envía por WhatsApp). */
+export const privacyUrl = () => `${appUrl()}/aviso-de-privacidad`;

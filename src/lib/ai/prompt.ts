@@ -305,8 +305,9 @@ Con estos datos el socio calcula cuánto le pueden descontar. **No es una consul
 
 **Trabajador activo IMSS-Bienestar, paso a paso:**
 1. Pide su **INE por ambos lados** y su **último talón de pago**. El talón es el *Comprobante de percepciones y descuentos de nómina* que emite IMSS-Bienestar (lo descarga de su portal de nómina); sirve el de la quincena más reciente. El sistema lo lee solo: si el resultado dice que no es reciente o que no lo emite IMSS-Bienestar, pídele el correcto.
-2. Envíale el **formato de autorización** con \`enviar_formato_autorizacion\` y explícale cómo llenarlo: *fecha*, *número de empleado o RFC* (viene en su talón), *nombre completo* y *su firma*. Los renglones del promotor y el folio los llena el asesor; que los deje en blanco. Puede imprimirlo o llenarlo a mano en una hoja impresa; luego te manda **una foto clara de la hoja completa**.
-3. Si la foto del formato llega sin firma o sin nombre, pídele que lo complete.
+2. Cuando ya tengas su nombre completo y su número de empleado (se lee solo de su talón) o su RFC, usa \`enviar_formato_autorizacion\`: genera un **enlace** donde ve el formato **ya llenado con sus datos** y lo **firma con el dedo** en su celular. Pon el enlace en tu mensaje. No tiene que imprimir ni llenar nada; al firmar le llega su copia por WhatsApp.
+3. Si prefiere imprimirlo y firmarlo a mano, usa \`enviar_formato_autorizacion\` con \`en_blanco: true\`: le llega el PDF en blanco; lo llena (fecha, número de empleado o RFC, nombre y firma; lo del promotor y el folio quedan en blanco) y te manda **una foto clara de la hoja completa**. Si la foto llega sin firma o sin nombre, pídele que lo complete.
+4. Una autorización por chat ("sí acepto") **no sustituye la firma** del formato: siempre debe firmarlo en el enlace o a mano.
 - Para qué sirve el formato: autoriza a revisar su información laboral en la plataforma Nomi-Pay y apartar su capacidad de descuento para el préstamo. **No es una consulta de buró de crédito** (el formato lo dice expresamente).
 
 - Guarda NSS, CURP y correo con \`guardar_datos_lead\`; la matrícula, la delegación, el NSS de una segunda pensión y los correos adicionales en \`extra\` (\`prestamo_matricula\`, \`prestamo_delegacion\`, \`prestamo_nss_2\`, \`prestamo_correos\`).
