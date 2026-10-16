@@ -5,6 +5,7 @@ import { ChatPanel } from "@/components/chat-panel";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
 import { Avatar, EmptyState } from "@/components/ui";
 import { cn, displayName, timeAgo } from "@/lib/utils";
+import { CHAT_INITIAL_MESSAGES } from "@/lib/constants";
 import type { DocumentRow, Lead, Message } from "@/lib/types";
 
 export const metadata = { title: "Conversaciones" };
@@ -55,7 +56,7 @@ export default async function InboxPage({ searchParams }: PageProps<"/inbox">) {
   if (selectedId) {
     const [{ data: lead }, { data: messages }, { data: docs }] = await Promise.all([
       supabase.from("leads").select("*").eq("id", selectedId).single(),
-      supabase.from("messages").select("*").eq("lead_id", selectedId).order("created_at", { ascending: true }).limit(300),
+      supabase.from("messages").select("*").eq("lead_id", selectedId).order("created_at", { ascending: false }).limit(CHAT_INITIAL_MESSAGES),
       supabase.from("documents").select("*").eq("lead_id", selectedId),
     ]);
     if (lead) selected = { lead: lead as Lead, messages: (messages ?? []) as Message[], docs: (docs ?? []) as DocumentRow[] };

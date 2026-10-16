@@ -8,7 +8,7 @@ import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
-import { TRAMITE_STATUSES } from "@/lib/constants";
+import { CHAT_INITIAL_MESSAGES, TRAMITE_STATUSES } from "@/lib/constants";
 import { getProducts, isOpenTramite } from "@/lib/products";
 import { displayName, formatDate, formatDateTime, isValidCurp, isValidNss } from "@/lib/utils";
 import type { Activity, DocumentRow, Lead, Message, Profile, Tramite } from "@/lib/types";
@@ -20,7 +20,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const [{ data: lead }, { data: messages }, { data: docs }, { data: tramites }, { data: activities }, { data: profiles }, products] =
     await Promise.all([
       supabase.from("leads").select("*").eq("id", id).maybeSingle(),
-      supabase.from("messages").select("*").eq("lead_id", id).order("created_at").limit(300),
+      supabase.from("messages").select("*").eq("lead_id", id).order("created_at", { ascending: false }).limit(CHAT_INITIAL_MESSAGES),
       supabase.from("documents").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
       supabase.from("tramites").select("*").eq("lead_id", id).order("created_at", { ascending: false }),
       supabase.from("activities").select("*").eq("lead_id", id).order("created_at", { ascending: false }).limit(50),

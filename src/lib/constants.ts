@@ -66,3 +66,7 @@ export const TRAMITE_TYPES = [
 
 /** Camino feliz de un producto, de "pidió información" hasta "resuelto". Rechazado/cancelado quedan fuera. */
 export const TRAMITE_FLOW: TramiteStatus[] = ["interesado", "pendiente", "en_proceso", "en_espera_imss", "resuelto"];
+
+/** Chat: mensajes que se cargan al abrir una conversación (los más recientes) y por cada "Cargar anteriores". */
+export const CHAT_INITIAL_MESSAGES = 7;
+export const CHAT_OLDER_PAGE = 20;

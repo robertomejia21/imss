@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Bot, Check, CheckCheck, FileText, Loader2, Mic, Pause, Play, Send, UserRound, AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { markRead, resolveHumanRequest, sendManualMessage, setAiEnabled, triggerAiReply } from "@/app/(crm)/actions";
 import { Avatar, Button } from "./ui";
 import { DocStatusBadge, LeadStatusBadge } from "./status-badge";
-import { DOC_TYPES } from "@/lib/constants";
+import { CHAT_INITIAL_MESSAGES, CHAT_OLDER_PAGE, DOC_TYPES } from "@/lib/constants";
 import { cn, displayName, formatPhone, formatTime } from "@/lib/utils";
 import type { DocumentRow, Lead, Message } from "@/lib/types";
 
@@ -191,6 +191,11 @@ export function ChatPanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Solo llegan los más recientes; los anteriores se piden bajo demanda (como WhatsApp)
+  const [hasOlder, setHasOlder] = useState(initialMessages.length >= CHAT_INITIAL_MESSAGES);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const prependFrom = useRef<{ height: number; top: number } | null>(null);
 
   // Tiempo real: mensajes, documentos y cambios del lead
   useEffect(() => {
@@ -201,7 +206,8 @@ export function ChatPanel({
         const row = p.new as Message;
         setMessages((prev) => {
           const i = prev.findIndex((m) => m.id === row.id);
-          if (i === -1) return [...prev, row];
+          // Un UPDATE de un mensaje viejo que no está cargado se ignora: si se agregara, dejaría un hueco al paginar
+          if (i === -1) return p.eventType === "INSERT" ? [...prev, row] : prev;
           const copy = [...prev];
           copy[i] = row;
           return copy;
@@ -225,13 +231,50 @@ export function ChatPanel({
     };
   }, [initialLead.id]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
-
   const docsByMessage = useMemo(() => new Map(docs.filter((d) => d.message_id).map((d) => [d.message_id!, d])), [docs]);
 
   const sorted = useMemo(() => [...messages].sort((a, b) => a.created_at.localeCompare(b.created_at)), [messages]);
+  const oldest = sorted[0];
+  const newestId = sorted.at(-1)?.id;
+
+  // Al abrir, directo hasta abajo; después, animado con cada mensaje nuevo (no al cargar anteriores)
+  const opened = useRef(false);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: opened.current ? "smooth" : "auto" });
+    opened.current = true;
+  }, [newestId]);
+
+  // Al agregar mensajes arriba, mantener a la vista lo que se estaba leyendo
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const from = prependFrom.current;
+    if (!el || !from) return;
+    el.scrollTop = el.scrollHeight - from.height + from.top;
+    prependFrom.current = null;
+  }, [oldest?.id]);
+
+  async function loadOlder() {
+    if (!oldest || loadingOlder) return;
+    setLoadingOlder(true);
+    const { data, error: err } = await createClient()
+      .from("messages")
+      .select("*")
+      .eq("lead_id", initialLead.id)
+      .lt("created_at", oldest.created_at)
+      .order("created_at", { ascending: false })
+      .limit(CHAT_OLDER_PAGE);
+    setLoadingOlder(false);
+    if (err) return setError(`No se pudieron cargar mensajes anteriores: ${err.message}`);
+    const older = (data ?? []) as Message[];
+    setHasOlder(older.length === CHAT_OLDER_PAGE);
+    if (!older.length) return;
+    const el = scrollRef.current;
+    if (el) prependFrom.current = { height: el.scrollHeight, top: el.scrollTop };
+    setMessages((prev) => {
+      const ids = new Set(prev.map((m) => m.id));
+      return [...older.filter((m) => !ids.has(m.id)), ...prev];
+    });
+  }
 
   function send() {
     const body = text.trim();
@@ -294,7 +337,20 @@ export function ChatPanel({
         </div>
       )}
 
-      <div className="chat-wallpaper scrollbar-thin min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="chat-wallpaper scrollbar-thin min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
+        {hasOlder && (
+          <div className="flex justify-center pb-1">
+            <button
+              type="button"
+              onClick={loadOlder}
+              disabled={loadingOlder}
+              className="inline-flex items-center gap-1.5 rounded-full bg-paper/90 px-3 py-1 text-xs font-medium text-muted shadow-sm ring-1 ring-line hover:text-ink disabled:opacity-60"
+            >
+              {loadingOlder && <Loader2 className="size-3.5 animate-spin" />}
+              {loadingOlder ? "Cargando…" : "Cargar mensajes anteriores"}
+            </button>
+          </div>
+        )}
         {sorted.length === 0 && <p className="py-10 text-center text-sm text-muted">Sin mensajes todavía.</p>}
         {sorted.map((m) => (
           <Bubble key={m.id} m={m} doc={docsByMessage.get(m.id)} />
