@@ -85,8 +85,8 @@ export const CONTRACT_FIELD_LABELS: Record<keyof ContractData, string> = {
 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-/** Junta los datos del contrato desde el lead, sus documentos (INE) y el asesor asignado. */
-export async function getContractData(db: SupabaseClient, lead: Lead): Promise<ContractData> {
+/** Junta los datos del contrato desde el lead, sus documentos (INE) y el asesor del trámite (o el principal del prospecto). */
+export async function getContractData(db: SupabaseClient, lead: Lead, advisorId?: string | null): Promise<ContractData> {
   const extra = { ...lead.form_data, ...lead.captured_data } as Record<string, unknown>;
 
   const { data: ines } = await db
@@ -100,8 +100,9 @@ export async function getContractData(db: SupabaseClient, lead: Lead): Promise<C
     ((ines ?? []) as { extracted: Record<string, unknown> }[]).map((d) => text(d.extracted?.[k])).find(Boolean) ?? null;
 
   let asesor: Pick<Profile, "full_name" | "phone" | "city" | "state"> | null = null;
-  if (lead.assigned_to) {
-    const { data } = await db.from("profiles").select("full_name, phone, city, state").eq("id", lead.assigned_to).maybeSingle();
+  const asesorId = advisorId ?? lead.assigned_to;
+  if (asesorId) {
+    const { data } = await db.from("profiles").select("full_name, phone, city, state").eq("id", asesorId).maybeSingle();
     asesor = data;
   }
 

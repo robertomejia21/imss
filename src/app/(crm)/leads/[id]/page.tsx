@@ -6,7 +6,7 @@ import { addNote, createTramite, updateLead, updateTramite } from "../../actions
 import { ChatPanel } from "@/components/chat-panel";
 import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
-import { ExpedienteButton } from "@/components/expediente-button";
+import { TramiteAdvisorPanel } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
 import { CHAT_INITIAL_MESSAGES, TRAMITE_STATUSES } from "@/lib/constants";
@@ -41,8 +41,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   // Productos que todavía no tiene abiertos, para agregarlos
   const available = products.map((p) => p.name).filter((n) => !openProducts.has(n.toLowerCase()));
   const str = (v: unknown) => (typeof v === "string" ? v : "");
-  const advisor = (profiles as Profile[] | null)?.find((p) => p.id === l.assigned_to);
-  const advisorName = advisor ? (advisor.full_name ?? advisor.email) : null;
+  const advisors = ((profiles ?? []) as Profile[]).map((p) => ({ id: p.id, name: p.full_name ?? p.email ?? "Asesor" }));
   // Último envío del expediente por trámite (la bitácora viene de la más reciente a la más vieja)
   const expedienteSentAt = new Map<string, string>();
   for (const a of (activities ?? []) as Activity[]) {
@@ -64,7 +63,10 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           </p>
         </div>
         <div className="w-56">
-          <StatusSelect leadId={l.id} status={l.status} />
+          <p className="mb-1 text-xs font-medium text-muted" title="Estado de la relación con el prospecto. La fase de cada producto va en Productos; cuando un producto pasa a En proceso o todos se cierran, este estado se actualiza solo.">
+            Estado general
+          </p>
+          <StatusSelect key={l.status} leadId={l.id} status={l.status} />
         </div>
       </div>
 
@@ -110,7 +112,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   </Field>
                 </div>
               )}
-              <Field label="Asesor asignado">
+              <Field label="Asesor principal" hint="Se usa en los productos que no tienen asesor propio.">
                 <Select name="assigned_to" defaultValue={l.assigned_to ?? ""}>
                   <option value="">Sin asignar</option>
                   {(profiles as Profile[] | null)?.map((p) => (
@@ -197,9 +199,17 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                       </Button>
                     </form>
                   </details>
-                  {(t.status === "pendiente" || t.status === "en_proceso" || t.status === "en_espera_imss") && (
+                  {isOpenTramite(t) && (
                     <div className="border-t border-line p-3">
-                      <ExpedienteButton tramiteId={t.id} advisorName={advisorName} lastSentAt={expedienteSentAt.get(t.id) ?? null} />
+                      <TramiteAdvisorPanel
+                        tramiteId={t.id}
+                        leadId={l.id}
+                        advisors={advisors}
+                        assignedTo={t.assigned_to ?? null}
+                        leadAdvisorId={l.assigned_to}
+                        canSend={t.status !== "interesado"}
+                        lastSentAt={expedienteSentAt.get(t.id) ?? null}
+                      />
                     </div>
                   )}
                 </div>

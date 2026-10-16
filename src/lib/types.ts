@@ -82,6 +82,8 @@ export interface Tramite {
   lead_id: string;
   tipo: string;
   status: TramiteStatus;
+  /** Asesor de este trámite; si es null se usa el asesor principal del prospecto (leads.assigned_to). */
+  assigned_to: string | null;
   folio_imss: string | null;
   due_date: string | null;
   notes: string | null;

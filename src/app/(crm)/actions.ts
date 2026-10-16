@@ -202,17 +202,37 @@ export async function createTramite(leadId: string, formData: FormData) {
     content: r.result === "creado" ? `Producto agregado: ${tipo}` : `Producto actualizado: ${tipo}`,
     created_by: user.id,
   });
-  await promoteLeadIfInProcess(supabase, leadId, status);
+  await syncLeadStatusFromTramites(supabase, leadId);
   revalidatePath(`/leads/${leadId}`);
 }
 
-/** El prospecto pasa a "En trámite" cuando alguno de sus productos ya se está gestionando. */
-async function promoteLeadIfInProcess(supabase: Awaited<ReturnType<typeof createClient>>, leadId: string, status: TramiteStatus | null) {
-  if (status !== "en_proceso" && status !== "en_espera_imss") return;
-  const { data: lead } = await supabase.from("leads").select("status").eq("id", leadId).single();
-  if (lead && ["nuevo", "en_conversacion", "registro_completo", "documentos_pendientes", "en_revision"].includes(lead.status)) {
-    await supabase.from("leads").update({ status: "en_tramite" }).eq("id", leadId);
+/**
+ * El estado general del prospecto sigue a sus trámites:
+ * - alguno con asesor o en espera del IMSS → "En trámite"
+ * - ninguno abierto y al menos uno resuelto → "Completado"
+ * Nunca lo regresa ni toca a los descartados.
+ */
+async function syncLeadStatusFromTramites(supabase: Awaited<ReturnType<typeof createClient>>, leadId: string) {
+  const [{ data: lead }, { data: rows }] = await Promise.all([
+    supabase.from("leads").select("status").eq("id", leadId).single(),
+    supabase.from("tramites").select("status").eq("lead_id", leadId),
+  ]);
+  if (!lead || lead.status === "descartado" || lead.status === "completado") return;
+  const statuses = ((rows ?? []) as { status: TramiteStatus }[]).map((r) => r.status);
+  const open = statuses.filter((s) => !["resuelto", "rechazado", "cancelado"].includes(s));
+  let next: LeadStatus | null = null;
+  if (open.some((s) => s === "en_proceso" || s === "en_espera_imss")) {
+    if (["nuevo", "en_conversacion", "registro_completo", "documentos_pendientes", "en_revision"].includes(lead.status)) next = "en_tramite";
+  } else if (!open.length && statuses.includes("resuelto")) {
+    next = "completado";
   }
+  if (!next || next === lead.status) return;
+  await supabase.from("leads").update({ status: next }).eq("id", leadId);
+  await supabase.from("activities").insert({
+    lead_id: leadId,
+    kind: "status_change",
+    content: `Estado general: ${leadStatusMeta(lead.status).label} → ${leadStatusMeta(next).label} (por sus trámites)`,
+  });
 }
 
 export async function updateTramite(tramiteId: string, leadId: string, formData: FormData) {
@@ -233,8 +253,29 @@ export async function updateTramite(tramiteId: string, leadId: string, formData:
     content: `Trámite actualizado${status ? ` → ${status}` : ""}`,
     created_by: user.id,
   });
-  await promoteLeadIfInProcess(supabase, leadId, status);
+  await syncLeadStatusFromTramites(supabase, leadId);
   revalidatePath(`/leads/${leadId}`);
+}
+
+/** Cambia el asesor de un trámite. Vacío = usar el asesor principal del prospecto. */
+export async function setTramiteAdvisor(tramiteId: string, leadId: string, advisorId: string | null): Promise<{ error?: string }> {
+  const { supabase, user } = await auth();
+  const { error } = await supabase.from("tramites").update({ assigned_to: advisorId }).eq("id", tramiteId);
+  if (error) {
+    return { error: error.message.includes("assigned_to") ? "Falta correr la migración 0006_asesor_por_tramite.sql en Supabase" : error.message };
+  }
+  const [{ data: advisor }, { data: t }] = await Promise.all([
+    advisorId ? supabase.from("profiles").select("full_name, email").eq("id", advisorId).single() : Promise.resolve({ data: null }),
+    supabase.from("tramites").select("tipo").eq("id", tramiteId).single(),
+  ]);
+  await supabase.from("activities").insert({
+    lead_id: leadId,
+    kind: "tramite",
+    content: `Asesor de ${t?.tipo ?? "trámite"}: ${advisor ? (advisor.full_name ?? advisor.email) : "el principal del prospecto"}`,
+    created_by: user.id,
+  });
+  revalidatePath(`/leads/${leadId}`);
+  return {};
 }
 
 // ---------- Documentos ----------
@@ -430,7 +471,16 @@ export async function sendDesempleoContract(leadId: string): Promise<{ error?: s
   const { data: lead } = await supabase.from("leads").select("*").eq("id", leadId).single();
   if (!lead) return { error: "Prospecto no encontrado" };
 
-  const data = await getContractData(supabase, lead as Lead);
+  const { data: desempleo } = await supabase
+    .from("tramites")
+    .select("*")
+    .eq("lead_id", leadId)
+    .ilike("tipo", "retiro por desempleo")
+    .not("status", "in", "(rechazado,cancelado)")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<Tramite>();
+  const data = await getContractData(supabase, lead as Lead, desempleo?.assigned_to);
   const missing = missingContractFields(data);
   if (missing.length) return { missing };
   if (!isGreenApiConfigured()) return { error: "Green API no está configurado" };
@@ -471,8 +521,9 @@ export async function sendExpedienteToAdvisor(tramiteId: string): Promise<{ erro
   if (!tramite) return { error: "Trámite no encontrado" };
   const { data: lead } = await supabase.from("leads").select("*").eq("id", tramite.lead_id).single<Lead>();
   if (!lead) return { error: "Prospecto no encontrado" };
-  if (!lead.assigned_to) return { error: "El prospecto no tiene asesor asignado. Asígnalo en “Datos del prospecto”." };
-  const { data: advisor } = await supabase.from("profiles").select("id, full_name, phone").eq("id", lead.assigned_to).single<Pick<Profile, "id" | "full_name" | "phone">>();
+  const advisorId = tramite.assigned_to ?? lead.assigned_to;
+  if (!advisorId) return { error: "Este trámite no tiene asesor. Elígelo arriba del botón." };
+  const { data: advisor } = await supabase.from("profiles").select("id, full_name, phone").eq("id", advisorId).single<Pick<Profile, "id" | "full_name" | "phone">>();
   if (!advisor?.phone) return { error: "El asesor asignado no tiene WhatsApp registrado. Agrégalo en el menú Asesores." };
   if (!isGreenApiConfigured()) return { error: "Green API no está configurado" };
 
@@ -495,7 +546,7 @@ export async function sendExpedienteToAdvisor(tramiteId: string): Promise<{ erro
 
   if (tramite.status === "interesado" || tramite.status === "pendiente") {
     await supabase.from("tramites").update({ status: "en_proceso" }).eq("id", tramite.id);
-    await promoteLeadIfInProcess(supabase, lead.id, "en_proceso");
+    await syncLeadStatusFromTramites(supabase, lead.id);
   }
   await supabase.from("activities").insert({
     lead_id: lead.id,
