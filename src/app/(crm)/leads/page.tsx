@@ -3,12 +3,12 @@ import { Bot, Plus, Search, UserRound, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { createLead } from "../actions";
 import { Avatar, Button, Card, EmptyState, Field, Input, PageHeader, Select } from "@/components/ui";
-import { LeadStatusBadge, TramiteProgress } from "@/components/status-badge";
+import { TramiteProgress } from "@/components/status-badge";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
-import { LEAD_STATUSES } from "@/lib/constants";
+import { TRAMITE_STATUSES } from "@/lib/constants";
 import { getProducts } from "@/lib/products";
 import { displayName, formatDate, formatPhone, timeAgo } from "@/lib/utils";
-import type { Lead, Tramite } from "@/lib/types";
+import type { Lead, Tramite, TramiteStatus } from "@/lib/types";
 
 type LeadRow = Lead & { tramites: Pick<Tramite, "id" | "tipo" | "status" | "created_at">[] };
 
@@ -16,16 +16,18 @@ export const metadata = { title: "Prospectos" };
 
 export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   const sp = await searchParams;
-  const status = typeof sp.status === "string" ? sp.status : "";
+  const fase = typeof sp.fase === "string" && sp.fase in TRAMITE_STATUSES ? (sp.fase as TramiteStatus) : "";
   const product = typeof sp.product === "string" ? sp.product : "";
   const q = typeof sp.q === "string" ? sp.q.replace(/[,()%*]/g, " ").trim() : "";
 
   const supabase = await createClient();
   let query = supabase.from("leads").select("*, tramites(id, tipo, status, created_at)").order("created_at", { ascending: false }).limit(200);
-  if (status) query = query.eq("status", status);
-  if (product) {
-    // Prospectos con ese producto vigente (sin contar rechazados ni cancelados)
-    const { data: rows } = await supabase.from("tramites").select("lead_id").eq("tipo", product).not("status", "in", "(rechazado,cancelado)");
+  if (product || fase) {
+    // Prospectos con ese producto y/o un producto en esa fase (sin cancelados, salvo que se filtre por esa fase)
+    let t = supabase.from("tramites").select("lead_id");
+    if (product) t = t.eq("tipo", product);
+    t = fase ? t.eq("status", fase) : t.neq("status", "cancelado");
+    const { data: rows } = await t;
     query = query.in("id", [...new Set((rows ?? []).map((r) => r.lead_id as string))]);
   }
   if (q) query = query.or(`full_name.ilike.%${q}%,wa_name.ilike.%${q}%,phone.ilike.%${q}%,folio.ilike.%${q}%,curp.ilike.%${q}%,nss.ilike.%${q}%`);
@@ -77,11 +79,11 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
           <Input name="q" defaultValue={q} placeholder="Nombre, teléfono, folio, CURP o NSS" className="pl-9" />
         </div>
         <div className="w-full sm:w-48">
-          <Select name="status" defaultValue={status}>
-            <option value="">Todos los estados</option>
-            {LEAD_STATUSES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
+          <Select name="fase" defaultValue={fase}>
+            <option value="">Todas las fases</option>
+            {Object.entries(TRAMITE_STATUSES).map(([v, m]) => (
+              <option key={v} value={v}>
+                {m.label}
               </option>
             ))}
           </Select>
@@ -109,7 +111,6 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                 <tr>
                   <th className="px-5 py-3">Prospecto</th>
                   <th className="px-3 py-3">Productos</th>
-                  <th className="px-3 py-3">Estado</th>
                   <th className="px-3 py-3">Origen</th>
                   <th className="px-3 py-3">CURP</th>
                   <th className="px-3 py-3">Último mensaje</th>
@@ -131,6 +132,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                               <UserRound className="size-3.5 text-stone-500" aria-label="Atiende un asesor" />
                             )}
                             {l.needs_human && <span className="size-2 rounded-full bg-amber-500" title="Requiere asesor" />}
+                            {l.status === "descartado" && <span className="rounded-full bg-stone-100 px-1.5 text-[10px] font-medium text-stone-500">Descartado</span>}
                           </p>
                           <p className="text-xs text-muted">
                             {formatPhone(l.phone)} · {l.folio}
@@ -140,9 +142,6 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                     </td>
                     <td className="px-3 py-3">
                       <ProductPhases lead={l} />
-                    </td>
-                    <td className="px-3 py-3">
-                      <LeadStatusBadge status={l.status} />
                     </td>
                     <td className="px-3 py-3 capitalize text-muted">{l.source}</td>
                     <td className="px-3 py-3 font-mono text-xs text-muted">{l.curp ?? "—"}</td>
@@ -159,16 +158,16 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
   );
 }
 
-/** Un renglón por producto con su fase. Rechazados y cancelados no se muestran (igual que leads.tramite_type). */
+/** Un renglón por producto con su fase. Los cancelados no se muestran. */
 function ProductPhases({ lead }: { lead: LeadRow }) {
   const tramites = (lead.tramites ?? [])
-    .filter((t) => t.status !== "rechazado" && t.status !== "cancelado")
+    .filter((t) => t.status !== "cancelado")
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   if (tramites.length === 0) return <span className="text-muted">{lead.tramite_type ?? "—"}</span>;
   return (
     <ul className="space-y-1.5">
       {tramites.map((t) => (
-        <li key={t.id} className="grid grid-cols-[minmax(0,10rem)_auto] items-center gap-3">
+        <li key={t.id} className="grid grid-cols-[minmax(0,13rem)_auto] items-center gap-3">
           <span className="truncate text-ink" title={t.tipo}>
             {t.tipo}
           </span>
