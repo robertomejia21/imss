@@ -121,17 +121,17 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           {(Object.keys(extra).length > 0 || utmEntries.length > 0) && (
             <Card>
               <CardHeader title="Información capturada" />
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 p-5 text-sm">
+              <dl className="space-y-3 p-5 text-sm">
                 {Object.entries(extra).map(([k, v]) => (
-                  <div key={k} className="contents">
-                    <dt className="text-muted">{k.replaceAll("_", " ")}</dt>
-                    <dd className="break-words text-ink">{typeof v === "string" ? v : JSON.stringify(v)}</dd>
+                  <div key={k}>
+                    <dt className="text-xs font-medium capitalize text-muted">{k.replaceAll("_", " ")}</dt>
+                    <dd className="mt-0.5 break-words text-ink">{typeof v === "string" ? v : JSON.stringify(v)}</dd>
                   </div>
                 ))}
                 {utmEntries.map(([k, v]) => (
-                  <div key={k} className="contents">
-                    <dt className="text-muted">{k}</dt>
-                    <dd className="break-all text-xs text-ink">{v}</dd>
+                  <div key={k}>
+                    <dt className="text-xs font-medium text-muted">{k}</dt>
+                    <dd className="mt-0.5 break-all text-xs text-ink">{v}</dd>
                   </div>
                 ))}
               </dl>

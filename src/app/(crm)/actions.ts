@@ -238,24 +238,29 @@ export async function updateTramite(tramiteId: string, leadId: string, formData:
 
 // ---------- Documentos ----------
 
-export async function reviewDocument(documentId: string, status: DocumentStatus, notes?: string) {
+export async function reviewDocument(documentId: string, status: DocumentStatus, notes?: string): Promise<{ error?: string }> {
   const { supabase, user } = await auth();
-  const { data: doc } = await supabase
-    .from("documents")
-    .update({ status, review_notes: notes ?? null, reviewed_by: user.id, reviewed_at: new Date().toISOString() })
-    .eq("id", documentId)
-    .select("lead_id, doc_type")
-    .single();
-  if (doc) {
-    await supabase.from("activities").insert({
-      lead_id: doc.lead_id,
-      kind: "document",
-      content: `Documento ${doc.doc_type ?? ""} revisado por asesor → ${status}${notes ? `: ${notes}` : ""}`,
-      created_by: user.id,
-    });
+  const patch = { status, review_notes: notes ?? null, reviewed_by: user.id as string | null, reviewed_at: new Date().toISOString() };
+  const update = () => supabase.from("documents").update(patch).eq("id", documentId).select("lead_id, doc_type").single();
+  let { data: doc, error } = await update();
+  // Usuario sin fila en "profiles": se guarda la revisión sin quién la hizo en lugar de fallar
+  if (error?.code === "23503") {
+    patch.reviewed_by = null;
+    ({ data: doc, error } = await update());
   }
+  if (error || !doc) {
+    console.error("reviewDocument", documentId, error);
+    return { error: error?.message ?? "No se pudo actualizar el documento" };
+  }
+  await supabase.from("activities").insert({
+    lead_id: doc.lead_id,
+    kind: "document",
+    content: `Documento ${doc.doc_type ?? ""} revisado por asesor → ${status}${notes ? `: ${notes}` : ""}`,
+    created_by: patch.reviewed_by,
+  });
   revalidatePath("/documentos");
-  if (doc) revalidatePath(`/leads/${doc.lead_id}`);
+  revalidatePath(`/leads/${doc.lead_id}`);
+  return {};
 }
 
 /** Vuelve a consultar el CEP de Banxico para un comprobante (p. ej. si al recibirlo aún no aparecía). */

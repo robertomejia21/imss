@@ -8,7 +8,7 @@ import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
 import { Button, Select } from "./ui";
 import { DocStatusBadge } from "./status-badge";
 import { formatDateTime } from "@/lib/utils";
-import type { DocumentRow, LeadStatus } from "@/lib/types";
+import type { DocumentRow, DocumentStatus, LeadStatus } from "@/lib/types";
 
 export function StatusSelect({ leadId, status }: { leadId: string; status: LeadStatus }) {
   const [value, setValue] = useState(status);
@@ -68,6 +68,16 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
   const isReceipt = doc.doc_type === "comprobante_pago";
   const banxico = ex.banxico as { estado: string; detalle: string; consultado_en: string } | undefined;
   const [bxMsg, setBxMsg] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [showIssues, setShowIssues] = useState(false);
+  const reviewed = Boolean(doc.reviewed_at);
+
+  const review = (status: DocumentStatus, notes?: string) =>
+    start(async () => {
+      setReviewError(null);
+      const r = await reviewDocument(doc.id, status, notes);
+      if (r.error) setReviewError(r.error);
+    });
 
   return (
     <div className="rounded-lg border border-line p-3">
@@ -83,7 +93,17 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
         <DocStatusBadge status={doc.status} />
       </div>
 
-      {doc.issues.length > 0 && (
+      {reviewed && (
+        <p className={`mt-2 text-xs font-medium ${doc.status === "valido" ? "text-emerald-700" : "text-red-700"}`}>
+          {doc.status === "valido" ? "Aprobado" : "Rechazado"} por asesor · {formatDateTime(doc.reviewed_at!)}
+        </p>
+      )}
+      {reviewed && doc.issues.length > 0 && (
+        <button type="button" onClick={() => setShowIssues((v) => !v)} className="mt-1 text-xs text-muted underline-offset-2 hover:underline">
+          {showIssues ? "Ocultar" : "Ver"} observaciones del OCR ({doc.issues.length})
+        </button>
+      )}
+      {doc.issues.length > 0 && (!reviewed || showIssues) && (
         <ul className="mt-2 list-inside list-disc space-y-0.5 text-xs text-amber-800">
           {doc.issues.map((i) => (
             <li key={i}>{i}</li>
@@ -116,6 +136,8 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
       )}
       {bxMsg && <p className="mt-1 text-xs text-muted">{bxMsg}</p>}
 
+      {reviewError && <p className="mt-2 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">No se guardó la revisión: {reviewError}</p>}
+
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         <Button size="sm" variant="secondary" onClick={openFile}>
           <ExternalLink className="size-3.5" /> Ver
@@ -142,7 +164,7 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
           </Button>
         )}
         <span className="flex-1" />
-        <Button size="sm" variant="ghost" disabled={pending} onClick={() => start(() => reviewDocument(doc.id, "valido"))} title="Aprobar">
+        <Button size="sm" variant="ghost" disabled={pending} onClick={() => review("valido")} title="Aprobar">
           <Check className="size-3.5 text-emerald-600" /> Aprobar
         </Button>
         <Button
@@ -151,7 +173,7 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
           disabled={pending}
           onClick={() => {
             const notes = window.prompt("Motivo del rechazo (opcional)") ?? undefined;
-            start(() => reviewDocument(doc.id, "invalido", notes));
+            review("invalido", notes);
           }}
           title="Rechazar"
         >
