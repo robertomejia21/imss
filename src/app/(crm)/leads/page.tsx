@@ -5,6 +5,7 @@ import { createLead } from "../actions";
 import { Avatar, Button, Card, EmptyState, Field, Input, PageHeader, Select } from "@/components/ui";
 import { TramiteProgress } from "@/components/status-badge";
 import { RealtimeRefresh } from "@/components/realtime-refresh";
+import { DeleteLeadButton } from "@/components/delete-lead-button";
 import { TRAMITE_STATUSES } from "@/lib/constants";
 import { getProducts } from "@/lib/products";
 import { displayName, formatDate, formatPhone, timeAgo } from "@/lib/utils";
@@ -115,6 +116,7 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                   <th className="px-3 py-3">CURP</th>
                   <th className="px-3 py-3">Último mensaje</th>
                   <th className="px-5 py-3">Alta</th>
+                  <th className="w-12 px-3 py-3"><span className="sr-only">Acciones</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -147,6 +149,9 @@ export default async function LeadsPage({ searchParams }: PageProps<"/leads">) {
                     <td className="px-3 py-3 font-mono text-xs text-muted">{l.curp ?? "—"}</td>
                     <td className="px-3 py-3 text-muted">{timeAgo(l.last_message_at)}</td>
                     <td className="px-5 py-3 text-muted">{formatDate(l.created_at)}</td>
+                    <td className="px-3 py-3 text-right">
+                      <DeleteLeadButton leadId={l.id} name={displayName(l)} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

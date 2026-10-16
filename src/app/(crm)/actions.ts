@@ -100,6 +100,23 @@ export async function createLead(formData: FormData) {
   redirect(`/leads/${data.id}`);
 }
 
+/**
+ * Borra un prospecto con todo su historial (mensajes, documentos, trámites y actividades caen en
+ * cascada) y sus archivos en Storage, para que pueda volver a escribir y empezar de cero (pruebas).
+ */
+export async function deleteLead(leadId: string, password: string): Promise<{ error?: string }> {
+  await auth();
+  if (password !== (process.env.LEAD_DELETE_PASSWORD || "987987")) return { error: "Contraseña incorrecta" };
+  const admin = createAdminClient();
+  // Archivos del prospecto: todos viven en "<leadId>/…" dentro del bucket media
+  const { data: files } = await admin.storage.from("media").list(leadId, { limit: 1000 });
+  if (files?.length) await admin.storage.from("media").remove(files.map((f) => `${leadId}/${f.name}`));
+  const { error } = await admin.from("leads").delete().eq("id", leadId);
+  if (error) return { error: error.message };
+  revalidatePath("/", "layout");
+  return {};
+}
+
 export async function setAiEnabled(leadId: string, enabled: boolean) {
   const { supabase, user } = await auth();
   await supabase
