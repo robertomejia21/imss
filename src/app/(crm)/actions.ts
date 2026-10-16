@@ -7,13 +7,14 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getStateInstance, isGreenApiConfigured, sendFileByUrl, sendText, setWebhook } from "@/lib/whatsapp/green-api";
 import { getContractData, missingContractFields, renderDesempleoContract } from "@/lib/contracts";
+import { advisorMessage, buildExpedienteZip } from "@/lib/expediente";
 import { replyToLead } from "@/lib/ai/agent";
 import { leadStatusMeta } from "@/lib/constants";
 import { addProductToLead } from "@/lib/products";
 import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico } from "@/lib/payment-verification";
 import { isMinorIssue } from "@/lib/payments";
-import { chatIdFromPhone, normalizeMxPhone } from "@/lib/utils";
-import type { DocumentRow, DocumentStatus, Lead, LeadStatus, TramiteStatus } from "@/lib/types";
+import { chatIdFromPhone, formatPhone, normalizeMxPhone } from "@/lib/utils";
+import type { DocumentRow, DocumentStatus, Lead, LeadStatus, Profile, Tramite, TramiteStatus } from "@/lib/types";
 
 async function auth() {
   const supabase = await createClient();
@@ -456,4 +457,54 @@ export async function sendDesempleoContract(leadId: string): Promise<{ error?: s
   });
   revalidatePath(`/leads/${leadId}`);
   return { url: signed.signedUrl, sentTo: data.profesionista! };
+}
+
+// ---------- Expediente al asesor ----------
+
+/**
+ * Manda al WhatsApp del asesor asignado el resumen del trámite y un ZIP con los documentos
+ * y datos del prospecto. Si el trámite seguía en "Registrado", pasa a "En proceso".
+ */
+export async function sendExpedienteToAdvisor(tramiteId: string): Promise<{ error?: string; sentTo?: string; url?: string; docCount?: number; failed?: string[] }> {
+  const { supabase, user } = await auth();
+  const { data: tramite } = await supabase.from("tramites").select("*").eq("id", tramiteId).single<Tramite>();
+  if (!tramite) return { error: "Trámite no encontrado" };
+  const { data: lead } = await supabase.from("leads").select("*").eq("id", tramite.lead_id).single<Lead>();
+  if (!lead) return { error: "Prospecto no encontrado" };
+  if (!lead.assigned_to) return { error: "El prospecto no tiene asesor asignado. Asígnalo en “Datos del prospecto”." };
+  const { data: advisor } = await supabase.from("profiles").select("id, full_name, phone").eq("id", lead.assigned_to).single<Pick<Profile, "id" | "full_name" | "phone">>();
+  if (!advisor?.phone) return { error: "El asesor asignado no tiene WhatsApp registrado. Agrégalo en el menú Asesores." };
+  if (!isGreenApiConfigured()) return { error: "Green API no está configurado" };
+
+  const { zip, docCount, failed } = await buildExpedienteZip(supabase, lead, tramite);
+  const slug = tramite.tipo.normalize("NFD").replace(/[^\w]+/g, "-").toLowerCase();
+  const path = `${lead.id}/expediente-${slug}-${Date.now()}.zip`;
+  const { error: upErr } = await supabase.storage.from("media").upload(path, zip, { contentType: "application/zip" });
+  if (upErr) return { error: `No se pudo guardar el ZIP: ${upErr.message}` };
+  const { data: signed } = await supabase.storage.from("media").createSignedUrl(path, 60 * 60 * 24 * 7);
+  if (!signed) return { error: "No se pudo generar el enlace del ZIP" };
+
+  const chatId = chatIdFromPhone(advisor.phone);
+  const fileName = `Expediente ${tramite.tipo} - ${lead.full_name ?? lead.wa_name ?? lead.folio} (${lead.folio}).zip`.replace(/[\\/:*?"<>|]+/g, " ");
+  try {
+    await sendText(chatId, advisorMessage(lead, tramite, advisor, docCount));
+    await sendFileByUrl(chatId, signed.signedUrl, fileName);
+  } catch (e) {
+    return { error: `Expediente generado, pero no se pudo enviar por WhatsApp: ${(e as Error).message}`, url: signed.signedUrl };
+  }
+
+  if (tramite.status === "interesado" || tramite.status === "pendiente") {
+    await supabase.from("tramites").update({ status: "en_proceso" }).eq("id", tramite.id);
+    await promoteLeadIfInProcess(supabase, lead.id, "en_proceso");
+  }
+  await supabase.from("activities").insert({
+    lead_id: lead.id,
+    kind: "tramite",
+    content: `Expediente de ${tramite.tipo} enviado por WhatsApp al asesor ${advisor.full_name ?? ""} (${docCount} documentos)`,
+    meta: { path, tramite_id: tramite.id, advisor_id: advisor.id },
+    created_by: user.id,
+  });
+  revalidatePath(`/leads/${lead.id}`);
+  revalidatePath("/leads");
+  return { sentTo: advisor.full_name ?? formatPhone(advisor.phone), url: signed.signedUrl, docCount, failed };
 }

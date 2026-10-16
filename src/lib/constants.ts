@@ -27,7 +27,7 @@ export const TRAMITE_STATUSES: Record<TramiteStatus, { label: string; tone: stri
   pendiente: { label: "Registrado", tone: "bg-brand-50 text-brand-700 ring-brand-600/20" },
   en_proceso: { label: "En proceso", tone: "bg-sky-50 text-sky-700 ring-sky-600/20" },
   en_espera_imss: { label: "En espera IMSS", tone: "bg-amber-50 text-amber-800 ring-amber-600/20" },
-  resuelto: { label: "Resuelto", tone: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  resuelto: { label: "Resuelto / ganado", tone: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
   rechazado: { label: "Rechazado", tone: "bg-red-50 text-red-700 ring-red-600/20" },
   cancelado: { label: "Cancelado", tone: "bg-stone-100 text-stone-500 ring-stone-500/20" },
 };

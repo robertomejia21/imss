@@ -6,6 +6,7 @@ import { addNote, createTramite, updateLead, updateTramite } from "../../actions
 import { ChatPanel } from "@/components/chat-panel";
 import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
+import { ExpedienteButton } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
 import { CHAT_INITIAL_MESSAGES, TRAMITE_STATUSES } from "@/lib/constants";
@@ -40,6 +41,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   // Productos que todavía no tiene abiertos, para agregarlos
   const available = products.map((p) => p.name).filter((n) => !openProducts.has(n.toLowerCase()));
   const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const advisor = (profiles as Profile[] | null)?.find((p) => p.id === l.assigned_to);
+  const advisorName = advisor ? (advisor.full_name ?? advisor.email) : null;
+  // Último envío del expediente por trámite (la bitácora viene de la más reciente a la más vieja)
+  const expedienteSentAt = new Map<string, string>();
+  for (const a of (activities ?? []) as Activity[]) {
+    const tid = a.meta?.tramite_id;
+    if (typeof tid === "string" && a.content.startsWith("Expediente") && !expedienteSentAt.has(tid)) expedienteSentAt.set(tid, a.created_at);
+  }
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-8">
@@ -158,35 +167,42 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
               {isDesempleo && <ContractButton leadId={l.id} />}
               {leadTramites.length === 0 && <p className="text-sm text-muted">Aún no ha pedido información de ningún producto.</p>}
               {leadTramites.map((t) => (
-                <details key={t.id} className="group rounded-lg border border-line">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3">
-                    <div>
-                      <p className="text-sm font-medium">{t.tipo}</p>
-                      <p className="text-xs text-muted">
-                        {t.folio_imss ? `Folio IMSS ${t.folio_imss} · ` : ""}
-                        {t.due_date ? `Compromiso ${formatDate(t.due_date)}` : `Actualizado ${formatDate(t.updated_at)}`}
-                      </p>
+                <div key={t.id} className="rounded-lg border border-line">
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-3">
+                      <div>
+                        <p className="text-sm font-medium">{t.tipo}</p>
+                        <p className="text-xs text-muted">
+                          {t.folio_imss ? `Folio IMSS ${t.folio_imss} · ` : ""}
+                          {t.due_date ? `Compromiso ${formatDate(t.due_date)}` : `Actualizado ${formatDate(t.updated_at)}`}
+                        </p>
+                      </div>
+                      <TramiteStatusBadge status={t.status} />
+                    </summary>
+                    <form action={updateTramite.bind(null, t.id, l.id)} className="space-y-2 border-t border-line p-3">
+                      <Select name="status" defaultValue={t.status}>
+                        {Object.entries(TRAMITE_STATUSES).map(([v, m]) => (
+                          <option key={v} value={v}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </Select>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input name="folio_imss" placeholder="Folio IMSS" defaultValue={t.folio_imss ?? ""} />
+                        <Input name="due_date" type="date" defaultValue={t.due_date ?? ""} />
+                      </div>
+                      <Textarea name="notes" rows={2} placeholder="Notas" defaultValue={t.notes ?? ""} />
+                      <Button size="sm" className="w-full">
+                        Actualizar trámite
+                      </Button>
+                    </form>
+                  </details>
+                  {(t.status === "pendiente" || t.status === "en_proceso" || t.status === "en_espera_imss") && (
+                    <div className="border-t border-line p-3">
+                      <ExpedienteButton tramiteId={t.id} advisorName={advisorName} lastSentAt={expedienteSentAt.get(t.id) ?? null} />
                     </div>
-                    <TramiteStatusBadge status={t.status} />
-                  </summary>
-                  <form action={updateTramite.bind(null, t.id, l.id)} className="space-y-2 border-t border-line p-3">
-                    <Select name="status" defaultValue={t.status}>
-                      {Object.entries(TRAMITE_STATUSES).map(([v, m]) => (
-                        <option key={v} value={v}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </Select>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input name="folio_imss" placeholder="Folio IMSS" defaultValue={t.folio_imss ?? ""} />
-                      <Input name="due_date" type="date" defaultValue={t.due_date ?? ""} />
-                    </div>
-                    <Textarea name="notes" rows={2} placeholder="Notas" defaultValue={t.notes ?? ""} />
-                    <Button size="sm" className="w-full">
-                      Actualizar trámite
-                    </Button>
-                  </form>
-                </details>
+                  )}
+                </div>
               ))}
               <details className="rounded-lg border border-dashed border-line">
                 <summary className="flex cursor-pointer list-none items-center gap-2 p-3 text-sm font-medium text-brand-600">
