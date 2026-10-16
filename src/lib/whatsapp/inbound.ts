@@ -127,7 +127,7 @@ export async function storeWebhook(payload: GreenWebhook): Promise<InboundResult
 
   // Mensaje escrito desde el teléfono del negocio (fuera del CRM): lo registramos como asesor
   if (payload.typeWebhook === "outgoingMessageReceived") {
-    const { data: lead } = await db.from("leads").select("id").eq("wa_chat_id", chatId).maybeSingle();
+    const { data: lead } = await db.from("leads").select("id, ai_enabled").eq("wa_chat_id", chatId).maybeSingle();
     if (!lead) return { kind: "ignored" };
     const { type, body } = parseContent(payload.messageData);
     await db
@@ -136,7 +136,14 @@ export async function storeWebhook(payload: GreenWebhook): Promise<InboundResult
         { lead_id: lead.id, direction: "out", sender: "agent", type, body, wa_message_id: payload.idMessage, status: "sent" },
         { onConflict: "wa_message_id", ignoreDuplicates: true },
       );
-    await db.from("leads").update({ last_message_at: new Date().toISOString() }).eq("id", lead.id);
+    // Un asesor contestó desde el teléfono: la IA se pausa para no cruzar respuestas
+    await db
+      .from("leads")
+      .update({ last_message_at: new Date().toISOString(), ...(lead.ai_enabled ? { ai_enabled: false } : {}) })
+      .eq("id", lead.id);
+    if (lead.ai_enabled) {
+      await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: "Asistente IA pausado: un asesor respondió desde el WhatsApp del negocio" });
+    }
     return { kind: "ignored" };
   }
 

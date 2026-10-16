@@ -306,7 +306,7 @@ export function ChatPanel({
         {error && <p className="mb-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">{error}</p>}
         {lead.ai_enabled && (
           <p className="mb-2 text-xs text-muted">
-            La IA está respondiendo. Si escribes tú, considera pausarla para no responder ambos.{" "}
+            La IA está respondiendo. Si escribes tú, se pausa sola para no responder ambos.{" "}
             <button className="font-medium text-brand-600 hover:underline" onClick={() => startTransition(() => triggerAiReply(lead.id))}>
               Pedir respuesta a la IA ahora
             </button>

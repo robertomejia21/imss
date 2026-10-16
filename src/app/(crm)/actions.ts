@@ -139,7 +139,7 @@ export async function sendManualMessage(leadId: string, text: string) {
   const { supabase, user } = await auth();
   const body = text.trim();
   if (!body) return { error: "Mensaje vacío" };
-  const { data: lead } = await supabase.from("leads").select("wa_chat_id").eq("id", leadId).single();
+  const { data: lead } = await supabase.from("leads").select("wa_chat_id, ai_enabled").eq("id", leadId).single();
   if (!lead?.wa_chat_id) return { error: "Este prospecto no tiene WhatsApp vinculado" };
   if (!isGreenApiConfigured()) return { error: "Green API no está configurado" };
 
@@ -155,7 +155,15 @@ export async function sendManualMessage(leadId: string, text: string) {
       status: "sent",
       sent_by: user.id,
     });
-    await supabase.from("leads").update({ last_message_at: new Date().toISOString(), unread_count: 0 }).eq("id", leadId);
+    // Si escribe un asesor, la IA se pausa para no cruzar respuestas (se reactiva con el switch "IA")
+    await supabase
+      .from("leads")
+      .update({ last_message_at: new Date().toISOString(), unread_count: 0, ...(lead.ai_enabled ? { ai_enabled: false } : {}) })
+      .eq("id", leadId);
+    if (lead.ai_enabled) {
+      await supabase.from("activities").insert({ lead_id: leadId, kind: "ai", content: "Asistente IA pausado: respondió un asesor", created_by: user.id });
+      revalidatePath("/", "layout");
+    }
     return { ok: true };
   } catch (e) {
     return { error: (e as Error).message };

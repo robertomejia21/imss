@@ -109,7 +109,8 @@ const buildTools = (products: Product[]): Anthropic.Beta.BetaTool[] => [
   {
     name: "solicitar_asesor_humano",
     description:
-      "Transfiere la conversación a un asesor humano y pausa al asistente para este contacto. Úsala si la persona lo pide, está molesta, o el caso requiere criterio humano. Después despídete diciendo que un asesor le escribirá pronto.",
+      "Avisa a un asesor humano que este caso necesita su atención (queda marcado en el CRM). Úsala si la persona lo pide, está molesta, o el caso requiere criterio humano. " +
+      "NO te pausa: sigues atendiendo. Dile que un asesor revisará su caso y le escribirá por aquí; mientras tanto puedes resolver dudas generales y recibir documentos, sin prometer lo que decide el asesor.",
     input_schema: {
       type: "object",
       properties: { reason: { type: "string", description: "Motivo para el asesor" } },
@@ -235,14 +236,15 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
     case "solicitar_asesor_humano": {
       const parsed = HumanInput.safeParse(input);
       const reason = parsed.success ? parsed.data.reason : "Solicitud de asesor";
-      await db
-        .from("leads")
-        .update({ needs_human: true, needs_human_reason: reason, ai_enabled: false })
-        .eq("id", lead.id);
+      const already = lead.needs_human;
+      // La IA sigue activa: se pausa sola cuando un asesor escribe en el chat (CRM o teléfono del negocio)
+      await db.from("leads").update({ needs_human: true, needs_human_reason: reason }).eq("id", lead.id);
       lead.needs_human = true;
-      lead.ai_enabled = false; // marca local: el traspaso ocurrió en esta misma respuesta
+      lead.needs_human_reason = reason;
       await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: `IA solicitó asesor humano: ${reason}` });
-      return "Listo: se notificó a un asesor y el asistente queda en pausa para este contacto. Despídete amablemente.";
+      return already
+        ? "Ya se había avisado a un asesor; se actualizó el motivo. Sigue atendiendo y dile que su asesor ya está enterado y le escribe por aquí."
+        : "Listo: se avisó a un asesor. Sigues atendiendo: dile que un asesor revisará su caso y le escribirá por aquí; mientras tanto puedes resolver dudas generales.";
     }
 
     case "generar_ficha_pago": {
@@ -447,6 +449,7 @@ function leadContext(lead: Lead, tramites: Tramite[]) {
       notas: t.notes ?? undefined,
     })),
     estado_en_crm: lead.status,
+    asesor_avisado: lead.needs_human ? lead.needs_human_reason || true : undefined,
     origen: lead.source,
     datos_formulario: Object.keys(lead.form_data ?? {}).length ? lead.form_data : undefined,
     otros_datos: Object.keys(lead.captured_data ?? {}).length ? lead.captured_data : undefined,
