@@ -13,7 +13,7 @@ import { leadStatusMeta } from "@/lib/constants";
 import { addProductToLead } from "@/lib/products";
 import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico } from "@/lib/payment-verification";
 import { isMinorIssue } from "@/lib/payments";
-import { chatIdFromPhone, formatPhone, normalizeMxPhone } from "@/lib/utils";
+import { chatIdFromPhone, digits, formatPhone, normalizeMxPhone } from "@/lib/utils";
 import type { DocumentRow, DocumentStatus, Lead, LeadStatus, Profile, Tramite, TramiteStatus } from "@/lib/types";
 
 async function auth() {
@@ -428,13 +428,17 @@ export async function createAdvisor(formData: FormData) {
   const phoneRaw = str(formData, "phone");
   const city = str(formData, "city");
   const state = str(formData, "state");
-  if (!email || !password || !fullName) return { error: "Nombre, correo y contraseña son obligatorios" };
-  if (password.length < 8) return { error: "La contraseña debe tener al menos 8 caracteres" };
+  if (!fullName) return { error: "El nombre es obligatorio" };
+  if (!phoneRaw || digits(phoneRaw).length < 10) return { error: "El WhatsApp es obligatorio (10 dígitos)" };
+  if (email && (!password || password.length < 8)) return { error: "Con correo, la contraseña debe tener al menos 8 caracteres" };
+  const phone = normalizeMxPhone(phoneRaw);
 
+  // Sin correo el asesor no entra al CRM: solo recibe contratos y expedientes por WhatsApp.
+  // Supabase Auth exige correo, así que se usa uno interno que nunca se muestra, con contraseña aleatoria.
   const admin = createAdminClient();
   const { data, error } = await admin.auth.admin.createUser({
-    email,
-    password,
+    email: email ?? `asesor-${phone}-${Date.now()}@sin-correo.invalid`,
+    password: email ? password! : `${crypto.randomUUID()}${crypto.randomUUID()}`,
     email_confirm: true,
     user_metadata: { full_name: fullName },
   });
@@ -442,7 +446,7 @@ export async function createAdvisor(formData: FormData) {
   // El trigger handle_new_user crea el perfil; se asegura nombre, rol y WhatsApp
   const { error: upErr } = await admin
     .from("profiles")
-    .upsert({ id: data.user.id, email, full_name: fullName, role: "asesor", phone: phoneRaw ? normalizeMxPhone(phoneRaw) : null, city, state });
+    .upsert({ id: data.user.id, email: email ?? null, full_name: fullName, role: "asesor", phone, city, state });
   revalidatePath("/asesores");
   if (upErr) return { error: `Usuario creado, pero no se guardaron su WhatsApp, ciudad y estado: ${upErr.message}` };
   return { ok: true };

@@ -47,6 +47,9 @@ export default async function AdvisorsPage({ searchParams }: PageProps<"/asesore
         title="Asesores"
         description="El asesor asignado a un prospecto aparece en el contrato de retiro por desempleo como “El Profesionista”, con su ciudad y estado, y recibe el PDF y los expedientes en su WhatsApp."
       />
+      <Card className="mb-6">
+        <AdvisorForm />
+      </Card>
       <Card className="overflow-hidden">
         <CardHeader title={`Equipo (${total})`} />
         <TeamTable profiles={(profiles ?? []) as Profile[]} />
@@ -64,9 +67,6 @@ export default async function AdvisorsPage({ searchParams }: PageProps<"/asesore
             </div>
           </div>
         )}
-      </Card>
-      <Card className="mt-6">
-        <AdvisorForm />
       </Card>
     </div>
   );

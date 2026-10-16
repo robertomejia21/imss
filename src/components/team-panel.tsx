@@ -37,7 +37,7 @@ export function TeamTable({ profiles }: { profiles: Profile[] }) {
                     <Avatar name={p.full_name ?? p.email ?? "?"} className="size-8" />
                     <div className="min-w-0">
                       <p className="truncate font-medium text-ink">{p.full_name ?? "Sin nombre"}</p>
-                      <p className="truncate text-xs text-muted">{p.email}</p>
+                      <p className="truncate text-xs text-muted">{p.email ?? "Sin acceso al CRM"}</p>
                     </div>
                   </div>
                 </td>
@@ -67,10 +67,10 @@ function EditRow({ p, onDone }: { p: Profile; onDone: () => void }) {
     <tr className="bg-brand-50/40">
       <td className="px-5 py-2.5">
         <Input form={formId} name="full_name" defaultValue={p.full_name ?? ""} placeholder="Nombre completo" className="h-9" autoFocus />
-        <p className="mt-1 truncate text-xs text-muted">{p.email}</p>
+        <p className="mt-1 truncate text-xs text-muted">{p.email ?? "Sin acceso al CRM"}</p>
       </td>
       <td className="px-3 py-2.5 align-top">
-        <Input form={formId} name="phone" defaultValue={p.phone?.slice(-10) ?? ""} placeholder="10 dígitos" inputMode="tel" className="h-9" />
+        <Input form={formId} name="phone" defaultValue={p.phone?.slice(-10) ?? ""} placeholder="10 dígitos" inputMode="tel" required className="h-9" />
       </td>
       <td className="px-3 py-2.5 align-top">
         <Input form={formId} name="city" defaultValue={p.city ?? ""} placeholder="Ej. Los Mochis" className="h-9" />
@@ -107,6 +107,7 @@ function EditRow({ p, onDone }: { p: Profile; onDone: () => void }) {
 export function AdvisorForm() {
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok?: boolean; text: string } | null>(null);
+  const [hasEmail, setHasEmail] = useState(false);
   const form = useRef<HTMLFormElement>(null);
 
   return (
@@ -122,8 +123,15 @@ export function AdvisorForm() {
           const data = new FormData(e.currentTarget);
           start(async () => {
             const r = await createAdvisor(data);
-            setMsg(r.error ? { text: r.error } : { ok: true, text: "Asesor registrado. Ya puede iniciar sesión con su correo y contraseña." });
-            if (!r.error) form.current?.reset();
+            setMsg(
+              r.error
+                ? { text: r.error }
+                : { ok: true, text: hasEmail ? "Asesor registrado. Ya puede iniciar sesión con su correo y contraseña." : "Asesor registrado. Recibirá contratos y expedientes en su WhatsApp." },
+            );
+            if (!r.error) {
+              form.current?.reset();
+              setHasEmail(false);
+            }
           });
         }}
       >
@@ -131,7 +139,7 @@ export function AdvisorForm() {
           <Input name="full_name" required />
         </Field>
         <Field label="WhatsApp">
-          <Input name="phone" placeholder="10 dígitos" inputMode="tel" />
+          <Input name="phone" placeholder="10 dígitos" inputMode="tel" pattern="[0-9 +()-]{10,}" required />
         </Field>
         <Field label="Ciudad">
           <Input name="city" required placeholder="Ej. Los Mochis" />
@@ -139,11 +147,11 @@ export function AdvisorForm() {
         <Field label="Estado">
           <Input name="state" required placeholder="Ej. Sinaloa" />
         </Field>
-        <Field label="Correo">
-          <Input name="email" type="email" required />
+        <Field label="Correo (opcional)" hint="Solo si va a entrar al CRM.">
+          <Input name="email" type="email" onChange={(e) => setHasEmail(e.target.value.trim() !== "")} />
         </Field>
-        <Field label="Contraseña" hint="Mínimo 8 caracteres.">
-          <Input name="password" type="password" minLength={8} required />
+        <Field label="Contraseña" hint={hasEmail ? "Mínimo 8 caracteres." : "Solo se pide si tiene correo."}>
+          <Input name="password" type="password" minLength={8} required={hasEmail} disabled={!hasEmail} />
         </Field>
         <Button disabled={pending} className="sm:col-span-2">
           {pending ? "Registrando…" : "Registrar asesor"}
