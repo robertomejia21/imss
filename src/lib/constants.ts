@@ -63,3 +63,6 @@ export const TRAMITE_TYPES = [
   "Corrección de datos",
   "Otro",
 ];
+
+/** Camino feliz de un producto, de "pidió información" hasta "resuelto". Rechazado/cancelado quedan fuera. */
+export const TRAMITE_FLOW: TramiteStatus[] = ["interesado", "pendiente", "en_proceso", "en_espera_imss", "resuelto"];
