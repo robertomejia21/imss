@@ -5,8 +5,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { anthropic, FALLBACK_BETA, MODEL } from "./anthropic";
 import { DEFAULT_AGENT_PROMPT, OPERATIONAL_CONTEXT, PRIVACY_URL_PLACEHOLDER } from "./prompt";
-import { privacyUrl } from "@/lib/company";
-import { authorizationData, createSigningLink, missingAuthorizationFields } from "@/lib/authorization-form";
+import { COMPANY, privacyUrl, tramiteEmailFor } from "@/lib/company";
+import { SIGNING_LINK_HOURS, authorizationData, createSigningLink, missingAuthorizationFields } from "@/lib/authorization-form";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
 import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
@@ -149,6 +149,15 @@ const buildTools = (products: Product[]): Anthropic.Beta.BetaTool[] => [
       type: "object",
       properties: { en_blanco: { type: "boolean", description: "Enviar el PDF en blanco en vez del enlace de firma" } },
     },
+  },
+  {
+    name: "generar_correo_tramite",
+    description:
+      "Alta en IMSS y préstamo vía nómina (pensionados y jubilados IMSS): genera el correo con el que registramos al cliente en el IMSS, " +
+      `basado en el correo de la empresa (${COMPANY.tramiteEmail}) con un alias de su nombre, y lo guarda en su expediente. ` +
+      "Así el código de confirmación nos llega a nosotros y le ayudamos con esa parte. Requiere su nombre completo guardado. " +
+      "NO le pidas su correo personal: usa esta herramienta y dile cuál correo quedó.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "consultar_expediente",
@@ -321,7 +330,7 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
         }
         const url = await createSigningLink(db, lead);
         await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: "IA envió el enlace para firmar el formato de autorización (Nomi-Pay)" });
-        return `Enlace de firma listo (vigente 7 días): ${url}\nInclúyelo tal cual en tu respuesta. Explícale que ahí ve su formato ya llenado con sus datos, lo revisa y lo firma con el dedo; al terminar le llega su copia por WhatsApp. No tiene que imprimir nada.`;
+        return `Enlace de firma listo (vigente ${SIGNING_LINK_HOURS} horas): ${url}\nInclúyelo tal cual en tu respuesta. Explícale que ahí ve su formato ya llenado con sus datos, lo revisa y lo firma con el dedo; al terminar le llega su copia por WhatsApp. No tiene que imprimir nada. Dile que tiene *${SIGNING_LINK_HOURS} horas* para firmarlo para poder dar seguimiento a su trámite, y que si se le pasa, le mandamos otro enlace.`;
       }
       const pdf = await readFile(AUTORIZACION_TEMPLATE);
       const { error: upErr } = await db.storage
@@ -350,6 +359,37 @@ async function executeTool(db: Db, lead: Lead, name: string, input: unknown): Pr
       lead.captured_data = captured;
       await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: "IA envió el formato de autorización de consulta (Nomi-Pay)" });
       return "Formato enviado por WhatsApp como PDF. Explícale cómo llenarlo y que te mande una foto clara del formato firmado.";
+    }
+
+    case "generar_correo_tramite": {
+      if (!lead.full_name) return "No se generó el correo: falta su nombre completo. Pídelo y guárdalo primero.";
+      const domain = COMPANY.tramiteEmail.split("@")[1];
+      if (lead.email && lead.captured_data?.correo_tramite === lead.email && lead.email.endsWith(`@${domain}`)) {
+        return `Ya tiene correo del trámite: ${lead.email}. No generes otro.`;
+      }
+      // Homónimos: cada cliente necesita su propio correo en el portal del IMSS.
+      // Primero sin sufijo; si ya existe, día y mes de hoy (ej. "2012" = 20 de diciembre); si también, "-2", "-3"…
+      const [, mm, dd] = cdmxDate(new Date()).split("-");
+      const ddmm = `${dd}${mm}`;
+      const suffixes = ["", ddmm, ...Array.from({ length: 18 }, (_, i) => `${ddmm}-${i + 2}`)];
+      let email: string | null = null;
+      for (const suffix of suffixes) {
+        const candidate = tramiteEmailFor(lead.full_name, suffix);
+        if (!candidate) break;
+        const { count } = await db.from("leads").select("id", { count: "exact", head: true }).eq("email", candidate).neq("id", lead.id);
+        if (!count) {
+          email = candidate;
+          break;
+        }
+      }
+      if (!email) return "No se pudo generar el correo con su nombre. Pasa el caso a un asesor.";
+      const captured = { ...lead.captured_data, correo_tramite: email };
+      const { error } = await db.from("leads").update({ email, captured_data: captured }).eq("id", lead.id);
+      if (error) return `Error al guardar el correo: ${error.message}`;
+      lead.email = email;
+      lead.captured_data = captured;
+      await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: `IA generó el correo del trámite: ${email}` });
+      return `Correo del trámite guardado: ${email}. Díselo al cliente: con ese correo lo registramos en el IMSS; los códigos y avisos nos llegan a nosotros y le ayudamos con ese paso, así no pierde el seguimiento. Su registro sigue siendo suyo.`;
     }
 
     case "consultar_expediente": {

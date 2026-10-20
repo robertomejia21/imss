@@ -6,6 +6,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { appUrl } from "@/lib/company";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import type { Lead } from "@/lib/types";
+import { isGreenApiConfigured, sendText } from "@/lib/whatsapp/green-api";
 
 /**
  * Formato "Autorización de consulta y reserva en plataforma Nomi-Pay" (préstamo vía nómina, IMSS-Bienestar).
@@ -15,7 +16,8 @@ import type { Lead } from "@/lib/types";
 type Db = ReturnType<typeof createAdminClient>;
 
 const TEMPLATE = path.join(process.cwd(), "src/lib/templates/autorizacion-consulta-nomipay.pdf");
-const LINK_DAYS = 7;
+export const SIGNING_LINK_HOURS = 12;
+const MAX_RENEWALS = 3; // enlaces nuevos que se mandan solos si vence sin firmar
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
 export interface AuthorizationData {
@@ -79,14 +81,91 @@ export async function renderAuthorizationPdf(
   return pdf.save();
 }
 
-/** Crea (o renueva) el enlace de firma del prospecto. */
+interface SigningLink {
+  token: string;
+  expira: string;
+  renovaciones?: number;
+}
+
+const signingUrl = (token: string) => `${appUrl()}/firma/${token}`;
+const newExpiry = () => new Date(Date.now() + SIGNING_LINK_HOURS * 3_600_000).toISOString();
+
+/**
+ * Crea el enlace de firma del prospecto. Si ya tiene uno vigente, conserva el mismo enlace
+ * (para que el que ya recibió siga sirviendo) y le reinicia las 12 horas.
+ */
 export async function createSigningLink(db: Db, lead: Lead): Promise<string> {
-  const token = randomBytes(18).toString("base64url");
-  const expira = new Date(Date.now() + LINK_DAYS * 86_400_000).toISOString();
-  const captured = { ...lead.captured_data, prestamo_firma: { token, expira } };
+  const current = lead.captured_data?.prestamo_firma as SigningLink | undefined;
+  const valid = current?.token && new Date(current.expira).getTime() > Date.now();
+  const firma: SigningLink = valid ? { ...current, expira: newExpiry() } : { token: randomBytes(18).toString("base64url"), expira: newExpiry() };
+  const captured = { ...lead.captured_data, prestamo_firma: firma };
   await db.from("leads").update({ captured_data: captured }).eq("id", lead.id);
   lead.captured_data = captured;
-  return `${appUrl()}/firma/${token}`;
+  return signingUrl(firma.token);
+}
+
+/**
+ * Enlaces de firma vencidos sin firmar: avisa al cliente por WhatsApp y le manda uno nuevo de 12 horas.
+ * Después de MAX_RENEWALS renovaciones deja de insistir y pasa el caso a un asesor.
+ */
+export async function renewExpiredSigningLinks(db: Db) {
+  if (!isGreenApiConfigured()) return { renovados: 0, a_asesor: 0 };
+  const { data } = await db
+    .from("leads")
+    .select("*")
+    .lt("captured_data->prestamo_firma->>expira", new Date().toISOString())
+    // Enlaces vencidos hace días (prospectos ya fríos) no se reviven solos
+    .gt("captured_data->prestamo_firma->>expira", new Date(Date.now() - 3 * 86_400_000).toISOString())
+    .limit(50);
+  let renovados = 0;
+  let aAsesor = 0;
+
+  for (const lead of (data as Lead[] | null) ?? []) {
+    const old = lead.captured_data?.prestamo_firma as SigningLink | undefined;
+    if (!old?.token || !lead.wa_chat_id) continue;
+    const renovaciones = (old.renovaciones ?? 0) + 1;
+    const { prestamo_firma: _old, ...rest } = lead.captured_data as Record<string, unknown>;
+    void _old;
+
+    const exhausted = renovaciones > MAX_RENEWALS;
+    const firma: SigningLink = { token: randomBytes(18).toString("base64url"), expira: newExpiry(), renovaciones };
+    const captured = exhausted ? { ...rest, prestamo_firma_vencida: new Date().toISOString() } : { ...rest, prestamo_firma: firma };
+    // Solo si nadie lo renovó o firmó mientras tanto (evita mensajes duplicados)
+    const { data: claimed } = await db
+      .from("leads")
+      .update(
+        exhausted
+          ? { captured_data: captured, needs_human: true, needs_human_reason: "Préstamo vía nómina: el cliente no firmó el formato de autorización (enlace vencido varias veces)." }
+          : { captured_data: captured },
+      )
+      .eq("id", lead.id)
+      .eq("captured_data->prestamo_firma->>token", old.token)
+      .select("id");
+    if (!claimed?.length) continue;
+
+    if (exhausted) {
+      await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: `El enlace de firma venció ${MAX_RENEWALS + 1} veces sin firmar; se pasó a un asesor` });
+      aAsesor++;
+      continue;
+    }
+
+    const nombre = lead.full_name?.trim().split(/\s+/)[0] ?? "";
+    const body =
+      `Hola${nombre ? ` ${nombre}` : ""} 👋🏻 El enlace para firmar tu *formato de autorización* venció. ` +
+      `Aquí tienes uno nuevo, vigente por *${SIGNING_LINK_HOURS} horas*:\n${signingUrl(firma.token)}\n\n` +
+      "Fírmalo con tu dedo desde tu celular para que podamos dar seguimiento a tu trámite de préstamo. 🙌";
+    try {
+      const idMessage = await sendText(lead.wa_chat_id, body);
+      const now = new Date().toISOString();
+      await db.from("messages").insert({ lead_id: lead.id, direction: "out", sender: "ai", type: "text", body, wa_message_id: idMessage, status: "sent" });
+      await db.from("leads").update({ last_message_at: now }).eq("id", lead.id);
+      await db.from("activities").insert({ lead_id: lead.id, kind: "ai", content: `Enlace de firma vencido: se envió uno nuevo (renovación ${renovaciones} de ${MAX_RENEWALS})` });
+      renovados++;
+    } catch (e) {
+      console.error("[firma] no se pudo enviar el enlace renovado", lead.id, e);
+    }
+  }
+  return { renovados, a_asesor: aAsesor };
 }
 
 /** Busca el prospecto de un enlace de firma vigente. */

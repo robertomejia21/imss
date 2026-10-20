@@ -2,12 +2,14 @@ import { after, NextResponse } from "next/server";
 import { storeWebhook, processMedia } from "@/lib/whatsapp/inbound";
 import { getAgentSettings, replyToLead } from "@/lib/ai/agent";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { renewExpiredSigningLinks } from "@/lib/authorization-form";
 import type { GreenWebhook } from "@/lib/whatsapp/green-api";
 
 // El OCR + la respuesta de la IA pueden tardar; en Vercel esto requiere plan con funciones largas.
 export const maxDuration = 300;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let lastSigningCheck = 0;
 
 /**
  * Webhook de Green API.
@@ -34,6 +36,12 @@ export async function POST(request: Request) {
   }
 
   const result = await storeWebhook(payload);
+
+  // Aprovecha el tráfico del webhook para renovar enlaces de firma vencidos (como mucho cada 10 minutos por instancia)
+  if (Date.now() - lastSigningCheck > 10 * 60_000) {
+    lastSigningCheck = Date.now();
+    after(() => renewExpiredSigningLinks(createAdminClient()).catch((e) => console.error("[firma] renovación", e)));
+  }
 
   // Responder 200 de inmediato a Green API y procesar en segundo plano
   if (result.kind !== "ignored") {
