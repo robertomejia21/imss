@@ -4,7 +4,7 @@ import { ArrowLeft, FileText, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { addNote, createTramite, updateLead, updateTramite } from "../../actions";
 import { ChatPanel } from "@/components/chat-panel";
-import { DocumentCard, StatusSelect } from "@/components/lead-widgets";
+import { DocumentCard, ResumeAiButton, StatusSelect } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteAdvisorPanel } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
@@ -247,7 +247,10 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
           </Card>
 
           <Card>
-            <CardHeader title={`Documentos (${docs?.length ?? 0})`} />
+            <CardHeader
+              title={`Documentos (${docs?.length ?? 0})`}
+              action={(docs as DocumentRow[] | null)?.some((d) => d.reviewed_at) && <ResumeAiButton leadId={l.id} />}
+            />
             <div className="space-y-3 p-4">
               {!docs?.length && <EmptyState icon={<FileText className="size-8" />} title="Sin documentos" description="Las fotos o PDFs que envíe por WhatsApp se verifican aquí con OCR." />}
               {(docs as DocumentRow[] | null)?.map((d) => (

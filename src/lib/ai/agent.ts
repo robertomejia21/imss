@@ -431,7 +431,7 @@ function messageToText(m: Message, docsByMessage: Map<string, DocumentRow>): str
       const label = m.type === "image" ? "[Imagen recibida]" : "[Documento recibido]";
       const caption = m.body ? `\nTexto que la acompaña: ${m.body}` : "";
       const analysis = doc?.extracted?.summary ? `\n${doc.extracted.summary as string}` : "\n(sin análisis disponible)";
-      return `${label}${caption}${analysis}`;
+      return `${label}${caption}${analysis}${doc ? advisorReviewNote(doc) : ""}`;
     }
     case "location":
       return `[Ubicación compartida] ${m.body ?? ""}`;
@@ -440,6 +440,15 @@ function messageToText(m: Message, docsByMessage: Map<string, DocumentRow>): str
     default:
       return m.body ?? "";
   }
+}
+
+/** La revisión de un asesor manda sobre el análisis automático del documento. */
+function advisorReviewNote(doc: Pick<DocumentRow, "status" | "reviewed_at" | "review_notes">) {
+  if (!doc.reviewed_at) return "";
+  const notes = doc.review_notes ? ` Nota del asesor: ${doc.review_notes}` : "";
+  return doc.status === "valido"
+    ? `\nREVISIÓN DEL ASESOR: APROBADO. El documento es válido; ignora las observaciones del análisis automático y no lo vuelvas a pedir.${notes}`
+    : `\nREVISIÓN DEL ASESOR: RECHAZADO (${doc.status}). Pide uno nuevo.${notes}`;
 }
 
 async function buildConversation(db: Db, leadId: string, limit: number) {
@@ -473,7 +482,7 @@ async function buildConversation(db: Db, leadId: string, limit: number) {
   return { conversation: out, lastMessage: messages[messages.length - 1] };
 }
 
-function leadContext(lead: Lead, tramites: Tramite[]) {
+function leadContext(lead: Lead, tramites: Tramite[], reviewedDocs: DocumentRow[]) {
   const known = {
     folio: lead.folio,
     nombre_whatsapp: lead.wa_name,
@@ -490,6 +499,9 @@ function leadContext(lead: Lead, tramites: Tramite[]) {
     })),
     estado_en_crm: lead.status,
     asesor_avisado: lead.needs_human ? lead.needs_human_reason || true : undefined,
+    documentos_revisados_por_asesor: reviewedDocs.length
+      ? reviewedDocs.map((d) => ({ documento: d.doc_type, resultado: d.status === "valido" ? "aprobado" : "rechazado", nota: d.review_notes ?? undefined }))
+      : undefined,
     origen: lead.source,
     datos_formulario: Object.keys(lead.form_data ?? {}).length ? lead.form_data : undefined,
     otros_datos: Object.keys(lead.captured_data ?? {}).length ? lead.captured_data : undefined,
@@ -519,14 +531,26 @@ function productCatalog(products: Product[]) {
 // Generar respuesta
 // =============================================================
 
-export async function generateReply(db: Db, lead: Lead, settings: AgentSettings): Promise<string | null> {
+/**
+ * @param internalNote aviso del CRM (no del cliente) para que el agente retome la conversación
+ *   aunque el último mensaje no sea del usuario; p. ej. después de que un asesor aprobó documentos.
+ */
+export async function generateReply(db: Db, lead: Lead, settings: AgentSettings, internalNote?: string): Promise<string | null> {
   const { conversation, lastMessage } = await buildConversation(db, lead.id, settings.history_limit);
-  // Solo respondemos si el último mensaje es del usuario
-  if (!lastMessage || lastMessage.direction !== "in" || conversation.length === 0) return null;
+  if (internalNote) {
+    const text = `[Aviso interno del CRM, el cliente NO escribió esto ni lo ve] ${internalNote}`;
+    const last = conversation[conversation.length - 1];
+    if (last?.role === "user") last.content = `${last.content as string}\n\n${text}`;
+    else conversation.push({ role: "user", content: text });
+  } else if (!lastMessage || lastMessage.direction !== "in" || conversation.length === 0) {
+    // Solo respondemos si el último mensaje es del usuario
+    return null;
+  }
 
-  const [products, { data: tramites }] = await Promise.all([
+  const [products, { data: tramites }, { data: reviewedDocs }] = await Promise.all([
     getProducts(db),
     db.from("tramites").select("*").eq("lead_id", lead.id).order("created_at"),
+    db.from("documents").select("*").eq("lead_id", lead.id).not("reviewed_at", "is", null).order("created_at"),
   ]);
   const tools = buildTools(products);
 
@@ -536,7 +560,7 @@ export async function generateReply(db: Db, lead: Lead, settings: AgentSettings)
       text: `${(settings.system_prompt?.trim() || DEFAULT_AGENT_PROMPT).replaceAll(PRIVACY_URL_PLACEHOLDER, privacyUrl())}\n\nTu nombre es ${settings.agent_name}.\n\n${productCatalog(products)}\n\n${OPERATIONAL_CONTEXT}`,
       cache_control: { type: "ephemeral" }, // instrucciones + herramientas quedan en caché
     },
-    { type: "text", text: leadContext(lead, (tramites as Tramite[] | null) ?? []) },
+    { type: "text", text: leadContext(lead, (tramites as Tramite[] | null) ?? [], (reviewedDocs as DocumentRow[] | null) ?? []) },
   ];
 
   const messages = [...conversation];
@@ -627,7 +651,7 @@ export async function getAgentSettings(db: Db): Promise<AgentSettings> {
  * Punto de entrada: decide si el agente debe responder a este lead y, si sí, responde.
  * Seguro de llamar varias veces: usa un candado en la fila del lead.
  */
-export async function replyToLead(leadId: string) {
+export async function replyToLead(leadId: string, internalNote?: string) {
   const db = createAdminClient();
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -653,8 +677,9 @@ export async function replyToLead(leadId: string) {
       const stopTyping = keepTyping(lead.wa_chat_id);
       let reply: string | null;
       try {
-        reply = await generateReply(db, lead, settings);
+        reply = await generateReply(db, lead, settings, internalNote);
       } finally {
+        internalNote = undefined; // el aviso solo va en la primera respuesta
         stopTyping();
       }
       if (!reply) return;

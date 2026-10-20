@@ -194,6 +194,28 @@ export async function triggerAiReply(leadId: string) {
   after(() => replyToLead(leadId).catch((e) => console.error("[triggerAiReply]", e)));
 }
 
+/**
+ * Después de revisar documentos: quita el aviso de "necesita asesor" y pide al agente que retome
+ * el trámite con el cliente aunque el último mensaje no sea suyo.
+ */
+export async function resumeAiAfterReview(leadId: string): Promise<{ error?: string }> {
+  const { supabase, user } = await auth();
+  const { data: lead } = await supabase.from("leads").select("ai_enabled").eq("id", leadId).single();
+  if (!lead?.ai_enabled) return { error: "La IA está pausada en este prospecto. Actívala en el chat para que continúe." };
+  await supabase.from("leads").update({ needs_human: false, needs_human_reason: null }).eq("id", leadId);
+  await supabase.from("activities").insert({ lead_id: leadId, kind: "ai", content: "Asesor revisó los documentos y pidió a la IA continuar el trámite", created_by: user.id });
+  after(() =>
+    replyToLead(
+      leadId,
+      "Un asesor ya revisó los documentos del cliente (mira la REVISIÓN DEL ASESOR de cada documento y documentos_revisados_por_asesor). " +
+        "Los aprobados son válidos aunque el análisis automático tuviera observaciones: no los vuelvas a pedir. " +
+        "Escríbele al cliente para avisarle que ya quedaron revisados y continúa con el siguiente paso de su trámite; si quedó alguno rechazado, pídeselo de nuevo.",
+    ).catch((e) => console.error("[resumeAiAfterReview]", e)),
+  );
+  revalidatePath("/", "layout");
+  return {};
+}
+
 // ---------- Trámites ----------
 
 export async function createTramite(leadId: string, formData: FormData) {

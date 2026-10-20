@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, ExternalLink, Landmark, X } from "lucide-react";
+import { Check, ExternalLink, Landmark, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { recheckPaymentWithBanxico, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
+import { recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
 import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
 import { Button, Select } from "./ui";
 import { DocStatusBadge } from "./status-badge";
@@ -52,6 +52,32 @@ const FIELD_LABELS: Record<string, string> = {
   fecha_emision: "Emisión",
   vigencia: "Vigencia",
 };
+
+/** Avisa a la IA que ya se revisaron los documentos para que le escriba al cliente y siga el trámite. */
+export function ResumeAiButton({ leadId }: { leadId: string }) {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button
+        size="sm"
+        variant="secondary"
+        disabled={pending}
+        title="Le avisa a la IA que ya revisaste los documentos para que le escriba al cliente y siga con el trámite"
+        onClick={() =>
+          start(async () => {
+            const r = await resumeAiAfterReview(leadId);
+            setMsg(r.error ?? "Listo: la IA le escribirá al cliente en unos segundos.");
+          })
+        }
+      >
+        <Sparkles className="size-4" />
+        {pending ? "Avisando…" : "IA: continuar trámite"}
+      </Button>
+      {msg && <p className="max-w-56 text-right text-xs text-muted">{msg}</p>}
+    </div>
+  );
+}
 
 export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name?: string }; showLead?: boolean }) {
   const [pending, start] = useTransition();
