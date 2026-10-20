@@ -13,6 +13,7 @@ import { leadStatusMeta } from "@/lib/constants";
 import { addProductToLead } from "@/lib/products";
 import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico } from "@/lib/payment-verification";
 import { isMinorIssue } from "@/lib/payments";
+import { assignTramiteEmail } from "@/lib/tramite-email";
 import { chatIdFromPhone, digits, formatPhone, normalizeMxPhone } from "@/lib/utils";
 import type { DocumentRow, DocumentStatus, Lead, LeadStatus, Profile, Tramite, TramiteStatus } from "@/lib/types";
 
@@ -214,6 +215,20 @@ export async function resumeAiAfterReview(leadId: string): Promise<{ error?: str
   );
   revalidatePath("/", "layout");
   return {};
+}
+
+/** Genera desde el CRM el correo del trámite (el mismo que genera la IA). */
+export async function generateTramiteEmail(leadId: string): Promise<{ error?: string; email?: string; existing?: boolean }> {
+  const { supabase, user } = await auth();
+  const { data: lead } = await supabase.from("leads").select("id, full_name, email, captured_data").eq("id", leadId).single<Lead>();
+  if (!lead) return { error: "Prospecto no encontrado" };
+  const r = await assignTramiteEmail(supabase, lead);
+  if ("error" in r) return { error: lead.full_name ? r.error : "Primero guarda su nombre completo." };
+  if (!r.existing) {
+    await supabase.from("activities").insert({ lead_id: leadId, kind: "note", content: `Asesor generó el correo del trámite: ${r.email}`, created_by: user.id });
+  }
+  revalidatePath(`/leads/${leadId}`);
+  return r;
 }
 
 // ---------- Trámites ----------

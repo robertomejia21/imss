@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { Check, ExternalLink, Landmark, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
+import { generateTramiteEmail, recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
 import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
 import { Button, Select } from "./ui";
 import { DocStatusBadge } from "./status-badge";
@@ -52,6 +52,30 @@ const FIELD_LABELS: Record<string, string> = {
   fecha_emision: "Emisión",
   vigencia: "Vigencia",
 };
+
+/** Genera el correo del trámite (correo de la empresa + alias del nombre) sin esperar a la IA. */
+export function TramiteEmailButton({ leadId }: { leadId: string }) {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        disabled={pending}
+        className="text-xs font-medium text-brand-600 hover:underline disabled:opacity-60"
+        onClick={() =>
+          start(async () => {
+            const r = await generateTramiteEmail(leadId);
+            setMsg(r.error ?? (r.existing ? `Ya tenía correo del trámite: ${r.email}` : `Correo generado: ${r.email}`));
+          })
+        }
+      >
+        {pending ? "Generando…" : "Generar correo del trámite"}
+      </button>
+      {msg && <p className="mt-0.5 break-all text-xs text-muted">{msg}</p>}
+    </div>
+  );
+}
 
 /** Avisa a la IA que ya se revisaron los documentos para que le escriba al cliente y siga el trámite. */
 export function ResumeAiButton({ leadId }: { leadId: string }) {

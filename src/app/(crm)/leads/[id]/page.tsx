@@ -4,7 +4,7 @@ import { ArrowLeft, FileText, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { addNote, createTramite, updateLead, updateTramite } from "../../actions";
 import { ChatPanel } from "@/components/chat-panel";
-import { DocumentCard, ResumeAiButton, StatusSelect } from "@/components/lead-widgets";
+import { DocumentCard, ResumeAiButton, StatusSelect, TramiteEmailButton } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteAdvisorPanel } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
@@ -95,7 +95,8 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                   <Input name="birth_date" type="date" defaultValue={l.birth_date ?? ""} />
                 </Field>
                 <Field label="Correo">
-                  <Input name="email" type="email" defaultValue={l.email ?? ""} />
+                  <Input key={l.email ?? ""} name="email" type="email" defaultValue={l.email ?? ""} />
+                  {!l.captured_data?.correo_tramite && <TramiteEmailButton leadId={l.id} />}
                 </Field>
               </div>
               {isDesempleo && (
