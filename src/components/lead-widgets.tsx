@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, ExternalLink, Landmark, Sparkles, X } from "lucide-react";
+import { Check, Copy, ExternalLink, Landmark, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { generateTramiteEmail, recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
 import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
@@ -52,6 +52,29 @@ const FIELD_LABELS: Record<string, string> = {
   fecha_emision: "Emisión",
   vigencia: "Vigencia",
 };
+
+/** Copia un texto al portapapeles y muestra "Copiado" un momento. */
+export function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="secondary"
+      title={label}
+      aria-label={label}
+      className="shrink-0"
+      onClick={async () => {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? <Check className="size-4 text-emerald-600" /> : <Copy className="size-4" />}
+      {copied ? "Copiado" : "Copiar"}
+    </Button>
+  );
+}
 
 /** Genera el correo del trámite (correo de la empresa + alias del nombre) sin esperar a la IA. */
 export function TramiteEmailButton({ leadId }: { leadId: string }) {

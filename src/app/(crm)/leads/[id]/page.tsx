@@ -4,7 +4,7 @@ import { ArrowLeft, FileText, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { addNote, createTramite, updateLead, updateTramite } from "../../actions";
 import { ChatPanel } from "@/components/chat-panel";
-import { DocumentCard, ResumeAiButton, StatusSelect, TramiteEmailButton } from "@/components/lead-widgets";
+import { CopyButton, DocumentCard, ResumeAiButton, StatusSelect, TramiteEmailButton } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteAdvisorPanel } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
@@ -94,11 +94,14 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                 <Field label="Nacimiento">
                   <Input name="birth_date" type="date" defaultValue={l.birth_date ?? ""} />
                 </Field>
-                <Field label="Correo">
-                  <Input key={l.email ?? ""} name="email" type="email" defaultValue={l.email ?? ""} />
-                  {!l.captured_data?.correo_tramite && <TramiteEmailButton leadId={l.id} />}
-                </Field>
               </div>
+              <Field label="Correo">
+                <div className="flex gap-2">
+                  <Input key={l.email ?? ""} name="email" type="email" defaultValue={l.email ?? ""} className="min-w-0 flex-1" />
+                  {l.email && <CopyButton text={l.email} label="Copiar correo" />}
+                </div>
+                {!l.captured_data?.correo_tramite && <TramiteEmailButton leadId={l.id} />}
+              </Field>
               {isDesempleo && (
                 <div className="space-y-3 rounded-lg border border-line p-3">
                   <p className="text-xs font-medium text-muted">Datos para el contrato de retiro por desempleo</p>
