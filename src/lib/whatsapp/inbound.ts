@@ -109,7 +109,7 @@ async function findOrCreateLead(db: Db, chatId: string, waName: string | undefin
 
 export type InboundResult =
   | { kind: "ignored" }
-  | { kind: "text"; leadId: string }
+  | { kind: "text"; leadId: string; messageId: string }
   | { kind: "media"; leadId: string; messageId: string };
 
 /** Guarda en BD lo que llega por el webhook. Rápido: no llama a la IA. */
@@ -189,7 +189,7 @@ export async function storeWebhook(payload: GreenWebhook): Promise<InboundResult
     })
     .eq("id", lead.id);
 
-  return isMedia ? { kind: "media", leadId: lead.id, messageId: inserted.id } : { kind: "text", leadId: lead.id };
+  return isMedia ? { kind: "media", leadId: lead.id, messageId: inserted.id } : { kind: "text", leadId: lead.id, messageId: inserted.id };
 }
 
 /** Descarga el archivo, lo guarda en Storage y lo transcribe (audio) o le hace OCR (imagen/PDF). */

@@ -11,6 +11,7 @@ export type LeadStatus =
 export type MessageType = "text" | "image" | "audio" | "document" | "video" | "location" | "other";
 export type MessageSender = "lead" | "ai" | "agent" | "system";
 export type DocumentStatus = "pendiente" | "procesando" | "valido" | "con_observaciones" | "invalido" | "error";
+export type CobroStatus = "pendiente" | "enviado" | "parcial" | "pagado" | "cancelado";
 export type TramiteStatus = "interesado" | "pendiente" | "en_proceso" | "en_espera_imss" | "resuelto" | "rechazado" | "cancelado";
 
 export interface Lead {
@@ -98,7 +99,31 @@ export interface Product {
   offered_by_ai: boolean;
   active: boolean;
   sort_order: number;
+  /** Precio sugerido del servicio y comisión que se cobra al lograrlo (migración 0007). */
+  precio?: number | null;
+  comision?: number | null;
   created_at: string;
+}
+
+/** Comisión por cobrar de un producto logrado (un cobro por producto del prospecto). */
+export interface Cobro {
+  id: string;
+  lead_id: string;
+  tramite_id: string | null;
+  servicio: string;
+  asesor_id: string | null;
+  monto_servicio: number | null;
+  comision: number;
+  monto_cobrado: number;
+  status: CobroStatus;
+  fecha_servicio: string;
+  fecha_limite: string | null;
+  fecha_pago: string | null;
+  metodo_pago: string | null;
+  referencia: string | null;
+  notas: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Activity {

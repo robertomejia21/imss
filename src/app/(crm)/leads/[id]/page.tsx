@@ -4,21 +4,21 @@ import { ArrowLeft, FileText, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { addNote, createTramite, updateLead, updateTramite } from "../../actions";
 import { ChatPanel } from "@/components/chat-panel";
-import { CopyButton, DocumentCard, ResumeAiButton, StatusSelect, TramiteEmailButton } from "@/components/lead-widgets";
+import { CopyButton, DocumentCard, ResumeAiButton, SendToCobranzaButton, StatusSelect, TramiteEmailButton } from "@/components/lead-widgets";
 import { ContractButton } from "@/components/contract-button";
 import { TramiteAdvisorPanel } from "@/components/expediente-button";
 import { TramiteStatusBadge } from "@/components/status-badge";
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Textarea } from "@/components/ui";
-import { CHAT_INITIAL_MESSAGES, TRAMITE_STATUSES } from "@/lib/constants";
+import { CHAT_INITIAL_MESSAGES, COBRO_STATUSES, TRAMITE_STATUSES, cobroSaldo, mxn } from "@/lib/constants";
 import { getProducts, isOpenTramite } from "@/lib/products";
 import { displayName, formatDate, formatDateTime, isValidCurp, isValidNss } from "@/lib/utils";
-import type { Activity, DocumentRow, Lead, Message, Profile, Tramite } from "@/lib/types";
+import type { Activity, Cobro, DocumentRow, Lead, Message, Profile, Tramite } from "@/lib/types";
 
 export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const { id } = await params;
   const supabase = await createClient();
 
-  const [{ data: lead }, { data: messages }, { data: docs }, { data: tramites }, { data: activities }, { data: profiles }, products] =
+  const [{ data: lead }, { data: messages }, { data: docs }, { data: tramites }, { data: activities }, { data: profiles }, products, { data: cobros }] =
     await Promise.all([
       supabase.from("leads").select("*").eq("id", id).maybeSingle(),
       supabase.from("messages").select("*").eq("lead_id", id).order("created_at", { ascending: false }).limit(CHAT_INITIAL_MESSAGES),
@@ -27,6 +27,8 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
       supabase.from("activities").select("*").eq("lead_id", id).order("created_at", { ascending: false }).limit(50),
       supabase.from("profiles").select("id, full_name, email, role"),
       getProducts(supabase),
+      // Si la migración 0007 aún no corre, la consulta falla y simplemente no hay cobros
+      supabase.from("cobros").select("*").eq("lead_id", id),
     ]);
   if (!lead) notFound();
   const l = lead as Lead;
@@ -36,6 +38,7 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
   const extra = { ...l.form_data, ...l.captured_data } as Record<string, unknown>;
   const utmEntries = Object.entries(l.utm ?? {});
   const leadTramites = (tramites ?? []) as Tramite[];
+  const cobroByTramite = new Map(((cobros ?? []) as Cobro[]).map((c) => [c.tramite_id, c]));
   const openProducts = new Set(leadTramites.filter(isOpenTramite).map((t) => t.tipo.toLowerCase()));
   const isDesempleo = openProducts.has("retiro por desempleo");
   // Productos que todavía no tiene abiertos, para agregarlos
@@ -216,6 +219,30 @@ export default async function LeadPage({ params }: PageProps<"/leads/[id]">) {
                       />
                     </div>
                   )}
+                  {(() => {
+                    const cobro = cobroByTramite.get(t.id);
+                    if (cobro) {
+                      const meta = COBRO_STATUSES[cobro.status];
+                      return (
+                        <Link
+                          href={`/cobranza?status=todos&q=${encodeURIComponent(l.folio)}`}
+                          className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-xs hover:bg-stone-50"
+                        >
+                          <span className="text-muted">
+                            Cobranza · comisión {mxn(Number(cobro.comision))}
+                            {cobroSaldo(cobro) > 0 && cobroSaldo(cobro) < Number(cobro.comision) ? ` · debe ${mxn(cobroSaldo(cobro))}` : ""}
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 font-medium ring-1 ring-inset ${meta.tone}`}>{meta.label}</span>
+                        </Link>
+                      );
+                    }
+                    if (t.status === "interesado" || t.status === "rechazado" || t.status === "cancelado") return null;
+                    return (
+                      <div className="border-t border-line p-3">
+                        <SendToCobranzaButton tramiteId={t.id} leadId={l.id} />
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
               <details className="rounded-lg border border-dashed border-line">

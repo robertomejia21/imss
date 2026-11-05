@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, Copy, ExternalLink, Landmark, Sparkles, X } from "lucide-react";
+import { Check, Copy, ExternalLink, HandCoins, Landmark, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { generateTramiteEmail, recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, updateLeadStatus } from "@/app/(crm)/actions";
+import { generateTramiteEmail, recheckPaymentWithBanxico, resumeAiAfterReview, reviewDocument, sendToCobranza, updateLeadStatus } from "@/app/(crm)/actions";
 import { LEAD_STATUSES, DOC_TYPES } from "@/lib/constants";
 import { Button, Select } from "./ui";
 import { DocStatusBadge } from "./status-badge";
@@ -253,6 +253,26 @@ export function DocumentCard({ doc, showLead }: { doc: DocumentRow & { lead_name
           <X className="size-3.5 text-red-600" /> Rechazar
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** Manda un producto del prospecto a la página de cobranza (para cobrar la comisión). */
+export function SendToCobranzaButton({ tramiteId, leadId }: { tramiteId: string; leadId: string }) {
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div>
+      <Button
+        size="sm"
+        variant="secondary"
+        className="w-full"
+        disabled={pending}
+        onClick={() => start(async () => setError((await sendToCobranza(tramiteId, leadId)).error ?? null))}
+      >
+        <HandCoins className="size-3.5" /> {pending ? "Enviando…" : "Enviar a cobranza"}
+      </Button>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

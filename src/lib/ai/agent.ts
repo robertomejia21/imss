@@ -9,7 +9,8 @@ import { COMPANY, privacyUrl } from "@/lib/company";
 import { assignTramiteEmail } from "@/lib/tramite-email";
 import { SIGNING_LINK_HOURS, authorizationData, createSigningLink, missingAuthorizationFields } from "@/lib/authorization-form";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { keepTyping, sendFileByUrl, sendText } from "@/lib/whatsapp/green-api";
+import { keepTyping, sendFileByUrl, sendText, sendTyping } from "@/lib/whatsapp/green-api";
+import { extraWaitSeconds, splitReply, typingMsFor } from "./pacing";
 import { ALTA_PRICES, PAYMENT, buildSlip, cdmxDate, formatMxn, isPaymentConfigFictitious, renderPaymentSlipPdf } from "@/lib/payments";
 import { isValidCurp, isValidNss } from "@/lib/utils";
 import { addProductToLead, getProducts, isOpenTramite } from "@/lib/products";
@@ -620,6 +621,43 @@ async function hasPendingMedia(db: Db, leadId: string) {
   return (count ?? 0) > 0;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Último mensaje que escribió la persona. */
+async function latestInbound(db: Db, leadId: string) {
+  const { data } = await db
+    .from("messages")
+    .select("id, body, created_at")
+    .eq("lead_id", leadId)
+    .eq("direction", "in")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data as Pick<Message, "id" | "body" | "created_at"> | null;
+}
+
+/** Segundos de silencio que se esperan después de un mensaje antes de contestar. */
+const pauseSecondsAfter = (settings: AgentSettings | null, body: string | null | undefined) =>
+  (settings?.reply_delay_seconds ?? 6) + extraWaitSeconds(body);
+
+/**
+ * Visor de mensajes: espera a que la persona termine de escribir antes de contestar.
+ * Cada mensaje entrante llama a esta función; solo contesta la llamada del mensaje más reciente,
+ * cuando pasó la pausa sin que llegara otro. Así "hola" / "estoy buscando" / "una asesoría" / "para imss"
+ * se contestan juntos, una sola vez. Si el mensaje se ve incompleto, la pausa es más larga.
+ */
+export async function replyAfterPause(leadId: string, messageId: string) {
+  const db = createAdminClient();
+  const [settings, { data: msg }] = await Promise.all([
+    getAgentSettings(db),
+    db.from("messages").select("id, body, created_at").eq("id", messageId).maybeSingle(),
+  ]);
+  await sleep(pauseSecondsAfter(settings, msg?.body) * 1000);
+  const latest = await latestInbound(db, leadId);
+  if (msg && latest && latest.id !== msg.id) return; // llegó otro mensaje: lo contesta la llamada de ese mensaje
+  await replyToLead(leadId);
+}
+
 export async function getAgentSettings(db: Db): Promise<AgentSettings> {
   const { data } = await db.from("agent_settings").select("*").eq("id", 1).single();
   return data as AgentSettings;
@@ -676,30 +714,36 @@ export async function replyToLead(leadId: string, internalNote?: string) {
       // Archivos que envió la propia IA en esta respuesta (p. ej. la ficha de pago) no cuentan como respuesta de un asesor
       if (lastMsg?.direction === "out" && lastMsg.sender !== "ai") return;
 
-      const idMessage = await sendText(lead.wa_chat_id, reply);
-      const now = new Date().toISOString();
-      await db.from("messages").insert({
-        lead_id: leadId,
-        direction: "out",
-        sender: "ai",
-        type: "text",
-        body: reply,
-        wa_message_id: idMessage,
-        status: "sent",
-      });
-      await db.from("leads").update({ last_message_at: now }).eq("id", leadId);
+      // Se manda en varias burbujas cortas, con "escribiendo…" entre una y otra, como una persona
+      const parts = splitReply(reply);
+      for (let i = 0; i < parts.length; i++) {
+        if (i > 0) {
+          const ms = typingMsFor(parts[i]);
+          sendTyping(lead.wa_chat_id, ms).catch(() => {});
+          await sleep(ms);
+        }
+        const idMessage = await sendText(lead.wa_chat_id, parts[i]);
+        await db.from("messages").insert({
+          lead_id: leadId,
+          direction: "out",
+          sender: "ai",
+          type: "text",
+          body: parts[i],
+          wa_message_id: idMessage,
+          status: "sent",
+          meta: parts.length > 1 ? { part: i + 1, of: parts.length } : {},
+        });
+      }
+      await db.from("leads").update({ last_message_at: new Date().toISOString() }).eq("id", leadId);
     } finally {
       await releaseLock(db, leadId);
     }
 
-    // ¿Llegó otro mensaje mientras generábamos? Entonces respondemos de nuevo.
-    const { data: newer } = await db
-      .from("messages")
-      .select("id")
-      .eq("lead_id", leadId)
-      .eq("direction", "in")
-      .gt("created_at", answeredUpTo ?? new Date(0).toISOString())
-      .limit(1);
-    if (!newer?.length) return;
+    // ¿Llegó otro mensaje mientras generábamos? Esperamos a que la persona termine y respondemos de nuevo.
+    const latest = await latestInbound(db, leadId);
+    if (!latest || !answeredUpTo || latest.created_at <= answeredUpTo) return;
+    await sleep(pauseSecondsAfter(settings, latest.body) * 1000);
+    const newest = await latestInbound(db, leadId);
+    if (newest && newest.id !== latest.id) return; // siguió escribiendo: lo contesta la llamada de su último mensaje
   }
 }

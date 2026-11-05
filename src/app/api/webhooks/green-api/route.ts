@@ -1,6 +1,6 @@
 import { after, NextResponse } from "next/server";
 import { storeWebhook, processMedia } from "@/lib/whatsapp/inbound";
-import { getAgentSettings, replyToLead } from "@/lib/ai/agent";
+import { replyAfterPause, replyToLead } from "@/lib/ai/agent";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { renewExpiredSigningLinks } from "@/lib/authorization-form";
 import type { GreenWebhook } from "@/lib/whatsapp/green-api";
@@ -8,7 +8,6 @@ import type { GreenWebhook } from "@/lib/whatsapp/green-api";
 // El OCR + la respuesta de la IA pueden tardar; en Vercel esto requiere plan con funciones largas.
 export const maxDuration = 300;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let lastSigningCheck = 0;
 
 /**
@@ -49,12 +48,11 @@ export async function POST(request: Request) {
       try {
         if (result.kind === "media") {
           await processMedia(result.messageId);
+          await replyToLead(result.leadId);
         } else {
-          // Espera unos segundos para agrupar mensajes enviados en ráfaga
-          const settings = await getAgentSettings(createAdminClient());
-          await sleep((settings?.reply_delay_seconds ?? 6) * 1000);
+          // Visor de mensajes: espera a que la persona termine de escribir (si manda su idea en varios mensajes)
+          await replyAfterPause(result.leadId, result.messageId);
         }
-        await replyToLead(result.leadId);
       } catch (e) {
         console.error("[green-api webhook]", e);
       }

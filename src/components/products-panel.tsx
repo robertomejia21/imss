@@ -25,6 +25,14 @@ export function ProductsPanel({ products }: { products: Product[] }) {
               <label className="flex cursor-pointer items-center gap-1.5">
                 <input type="checkbox" name="offered_by_ai" defaultChecked={p.offered_by_ai} className="size-4 accent-brand-600" /> Lo ofrece la IA
               </label>
+              <label className="flex items-center gap-1.5" title="Precio del servicio para el cliente (se copia al cobro)">
+                Precio $
+                <Input name="precio" inputMode="decimal" defaultValue={p.precio ?? ""} placeholder="—" className="h-8 w-24" />
+              </label>
+              <label className="flex items-center gap-1.5" title="Comisión que se cobra cuando el servicio queda resuelto / ganado">
+                Comisión $
+                <Input name="comision" inputMode="decimal" defaultValue={p.comision ?? ""} placeholder="—" className="h-8 w-24" />
+              </label>
               <label className="flex items-center gap-1.5">
                 Orden
                 <Input name="sort_order" type="number" defaultValue={p.sort_order} className="h-8 w-20" />

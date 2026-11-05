@@ -48,7 +48,7 @@ export default async function SettingsPage() {
                   <option value="high">Alta</option>
                 </Select>
               </Field>
-              <Field label="Espera antes de responder (s)" hint="Agrupa mensajes enviados en ráfaga.">
+              <Field label="Espera antes de responder (s)" hint="Silencio que espera tras el último mensaje antes de contestar. Si el mensaje se ve incompleto («hola», «estoy buscando…»), espera más.">
                 <Input name="reply_delay_seconds" type="number" min={0} max={60} defaultValue={s?.reply_delay_seconds ?? 6} />
               </Field>
             </div>

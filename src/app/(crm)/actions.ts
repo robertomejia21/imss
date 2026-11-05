@@ -15,7 +15,7 @@ import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWith
 import { isMinorIssue } from "@/lib/payments";
 import { assignTramiteEmail } from "@/lib/tramite-email";
 import { chatIdFromPhone, digits, formatPhone, normalizeMxPhone } from "@/lib/utils";
-import type { DocumentRow, DocumentStatus, Lead, LeadStatus, Profile, Tramite, TramiteStatus } from "@/lib/types";
+import type { CobroStatus, DocumentRow, DocumentStatus, Lead, LeadStatus, Profile, Tramite, TramiteStatus } from "@/lib/types";
 
 async function auth() {
   const supabase = await createClient();
@@ -29,6 +29,14 @@ async function auth() {
 const str = (f: FormData, k: string) => {
   const v = f.get(k);
   return typeof v === "string" && v.trim() ? v.trim() : null;
+};
+
+/** Monto en pesos de un campo del formulario ("$1,500.00" → 1500); vacío = null. */
+const money = (f: FormData, k: string) => {
+  const v = str(f, k)?.replace(/[$,\s]/g, "");
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
 };
 
 // ---------- Leads ----------
@@ -469,6 +477,8 @@ export async function updateProduct(productId: string, formData: FormData) {
       sort_order: Number(formData.get("sort_order") ?? 0) || 0,
     })
     .eq("id", productId);
+  // Precio y comisión sugeridos para cobranza (columnas de la migración 0007; si aún no existen, se ignora)
+  await supabase.from("products").update({ precio: money(formData, "precio"), comision: money(formData, "comision") }).eq("id", productId);
   revalidatePath("/productos");
 }
 
@@ -616,4 +626,92 @@ export async function sendExpedienteToAdvisor(tramiteId: string): Promise<{ erro
   revalidatePath(`/leads/${lead.id}`);
   revalidatePath("/leads");
   return { sentTo: advisor.full_name ?? formatPhone(advisor.phone), url: signed.signedUrl, docCount, failed };
+}
+
+// ---------- Cobranza ----------
+
+const MISSING_COBROS = "Falta correr la migración 0007_cobranza.sql en Supabase";
+const todayCdmx = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+const isMissingTable = (e: { code?: string; message: string }) => e.code === "42P01" || e.code === "PGRST205" || /relation .*cobros.* does not exist|table .*cobros/i.test(e.message);
+
+/** Manda a cobranza un producto del prospecto (también pasa solo cuando el producto queda "resuelto / ganado"). */
+export async function sendToCobranza(tramiteId: string, leadId: string): Promise<{ error?: string }> {
+  const { supabase, user } = await auth();
+  const [{ data: t }, { data: lead }] = await Promise.all([
+    supabase.from("tramites").select("id, tipo, assigned_to").eq("id", tramiteId).single<Pick<Tramite, "id" | "tipo" | "assigned_to">>(),
+    supabase.from("leads").select("assigned_to").eq("id", leadId).single(),
+  ]);
+  if (!t) return { error: "No encontré el producto" };
+  const { data: product } = await supabase.from("products").select("*").ilike("name", t.tipo).maybeSingle();
+  const { error } = await supabase.from("cobros").insert({
+    lead_id: leadId,
+    tramite_id: t.id,
+    servicio: t.tipo,
+    asesor_id: t.assigned_to ?? lead?.assigned_to ?? null,
+    monto_servicio: product?.precio ?? null,
+    comision: product?.comision ?? 0,
+  });
+  if (error) {
+    if (error.code === "23505") return { error: "Este producto ya está en cobranza" };
+    return { error: isMissingTable(error) ? MISSING_COBROS : error.message };
+  }
+  await supabase.from("activities").insert({ lead_id: leadId, kind: "cobranza", content: `${t.tipo} enviado a cobranza`, created_by: user.id });
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath("/cobranza");
+  return {};
+}
+
+/** Guarda los datos de un cobro. El estado se ajusta solo con los abonos (parcial / pagado). */
+export async function updateCobro(cobroId: string, formData: FormData): Promise<{ error?: string }> {
+  const { supabase, user } = await auth();
+  const comision = money(formData, "comision") ?? 0;
+  let cobrado = money(formData, "monto_cobrado") ?? 0;
+  let status = (str(formData, "status") ?? "pendiente") as CobroStatus;
+  if (status !== "cancelado") {
+    if (status === "pagado") cobrado = Math.max(cobrado, comision);
+    else if (comision > 0 && cobrado >= comision) status = "pagado";
+    else if (cobrado > 0) status = "parcial";
+    else if (status === "parcial") status = "pendiente";
+  }
+  const { data, error } = await supabase
+    .from("cobros")
+    .update({
+      status,
+      comision,
+      monto_cobrado: cobrado,
+      monto_servicio: money(formData, "monto_servicio"),
+      asesor_id: str(formData, "asesor_id"),
+      fecha_limite: str(formData, "fecha_limite"),
+      fecha_pago: str(formData, "fecha_pago") ?? (status === "pagado" || status === "parcial" ? todayCdmx() : null),
+      metodo_pago: str(formData, "metodo_pago"),
+      referencia: str(formData, "referencia"),
+      notas: str(formData, "notas"),
+    })
+    .eq("id", cobroId)
+    .select("lead_id, servicio")
+    .single();
+  if (error) return { error: error.message };
+  await supabase.from("activities").insert({
+    lead_id: data.lead_id,
+    kind: "cobranza",
+    content: `Cobranza de ${data.servicio}: ${status}${cobrado ? ` · cobrado $${cobrado.toLocaleString("es-MX")}` : ""}`,
+    created_by: user.id,
+  });
+  revalidatePath("/cobranza");
+  return {};
+}
+
+/** Atajo: registra el pago completo de la comisión con fecha de hoy. */
+export async function markCobroPaid(cobroId: string): Promise<{ error?: string }> {
+  const { supabase, user } = await auth();
+  const { data: c } = await supabase.from("cobros").select("comision, lead_id, servicio").eq("id", cobroId).single();
+  if (!c) return { error: "No encontré el cobro" };
+  const { error } = await supabase
+    .from("cobros")
+    .update({ status: "pagado", monto_cobrado: c.comision, fecha_pago: todayCdmx() })
+    .eq("id", cobroId);
+  if (error) return { error: error.message };
+  await supabase.from("activities").insert({ lead_id: c.lead_id, kind: "cobranza", content: `Comisión de ${c.servicio} pagada`, created_by: user.id });
+  revalidatePath("/cobranza");
+  return {};
 }

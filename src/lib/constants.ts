@@ -1,4 +1,4 @@
-import type { DocumentStatus, LeadStatus, TramiteStatus } from "./types";
+import type { CobroStatus, DocumentStatus, LeadStatus, TramiteStatus } from "./types";
 
 export const LEAD_STATUSES: { value: LeadStatus; label: string; tone: string }[] = [
   { value: "nuevo", label: "Nuevo", tone: "bg-sky-50 text-sky-700 ring-sky-600/20" },
@@ -70,3 +70,25 @@ export const TRAMITE_FLOW: TramiteStatus[] = ["interesado", "pendiente", "en_pro
 /** Chat: mensajes que se cargan al abrir una conversación (los más recientes) y por cada "Cargar anteriores". */
 export const CHAT_INITIAL_MESSAGES = 7;
 export const CHAT_OLDER_PAGE = 20;
+
+export const COBRO_STATUSES: Record<CobroStatus, { label: string; tone: string }> = {
+  pendiente: { label: "Por cobrar", tone: "bg-amber-50 text-amber-800 ring-amber-600/20" },
+  enviado: { label: "Cobro enviado", tone: "bg-sky-50 text-sky-700 ring-sky-600/20" },
+  parcial: { label: "Pago parcial", tone: "bg-violet-50 text-violet-700 ring-violet-600/20" },
+  pagado: { label: "Pagado", tone: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  cancelado: { label: "Cancelado", tone: "bg-stone-100 text-stone-500 ring-stone-500/20" },
+};
+
+export const PAYMENT_METHODS = ["Transferencia", "Depósito", "Efectivo", "Tarjeta", "Descuento de nómina", "Otro"];
+
+/** Pesos mexicanos sin centavos cuando son cero: $1,500 · $1,500.50 */
+export const mxn = (n: number | null | undefined) =>
+  n == null ? "—" : n.toLocaleString("es-MX", { style: "currency", currency: "MXN", minimumFractionDigits: n % 1 ? 2 : 0 });
+
+/** Lo que falta por cobrar de una comisión (los cancelados no deben nada). */
+export const cobroSaldo = (c: { status: string; comision: number; monto_cobrado: number }) =>
+  c.status === "cancelado" ? 0 : Math.max(0, Number(c.comision) - Number(c.monto_cobrado));
+
+/** Vencido: sigue sin pagarse y ya pasó su fecha límite. `today` en formato AAAA-MM-DD. */
+export const isCobroOverdue = (c: { status: string; fecha_limite: string | null }, today: string) =>
+  c.status !== "pagado" && c.status !== "cancelado" && !!c.fecha_limite && c.fecha_limite < today;
