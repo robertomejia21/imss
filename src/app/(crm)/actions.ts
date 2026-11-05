@@ -419,7 +419,7 @@ export async function saveAgentSettings(formData: FormData) {
       agent_name: str(formData, "agent_name") ?? "Asistente",
       system_prompt: String(formData.get("system_prompt") ?? ""),
       effort: str(formData, "effort") ?? "low",
-      reply_delay_seconds: Number(formData.get("reply_delay_seconds") ?? 6),
+      reply_delay_seconds: Number(formData.get("reply_delay_seconds") ?? 10),
       history_limit: Number(formData.get("history_limit") ?? 40),
     })
     .eq("id", 1);

@@ -638,7 +638,7 @@ async function latestInbound(db: Db, leadId: string) {
 
 /** Segundos de silencio que se esperan después de un mensaje antes de contestar. */
 const pauseSecondsAfter = (settings: AgentSettings | null, body: string | null | undefined) =>
-  (settings?.reply_delay_seconds ?? 6) + extraWaitSeconds(body);
+  (settings?.reply_delay_seconds ?? 10) + extraWaitSeconds(body);
 
 /**
  * Visor de mensajes: espera a que la persona termine de escribir antes de contestar.

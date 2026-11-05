@@ -49,7 +49,7 @@ export default async function SettingsPage() {
                 </Select>
               </Field>
               <Field label="Espera antes de responder (s)" hint="Silencio que espera tras el último mensaje antes de contestar. Si el mensaje se ve incompleto («hola», «estoy buscando…»), espera más.">
-                <Input name="reply_delay_seconds" type="number" min={0} max={60} defaultValue={s?.reply_delay_seconds ?? 6} />
+                <Input name="reply_delay_seconds" type="number" min={0} max={60} defaultValue={s?.reply_delay_seconds ?? 10} />
               </Field>
             </div>
             <Field label="Mensajes de historial que lee" hint="Últimos N mensajes de la conversación.">
