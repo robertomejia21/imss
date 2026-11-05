@@ -2,15 +2,23 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { downloadMedia, getDownloadUrl, type GreenWebhook } from "./green-api";
 import { transcribeAudio } from "@/lib/ai/transcribe";
-import { evaluateDocument, extractDocument, isOcrSupported, ocrDato, ocrSummaryForAgent } from "@/lib/ai/ocr";
+import { evaluateDocument, extractDocument, isMissingSideIssue, isOcrSupported, ocrDato, ocrSummaryForAgent } from "@/lib/ai/ocr";
+import { isMinorIssue } from "@/lib/payments";
+import { promoteInterestedProduct } from "@/lib/products";
 import { applyBanxicoCheck, banxicoLineForAgent, BANXICO_LABEL, checkReceiptWithBanxico, type BanxicoCheck } from "@/lib/payment-verification";
 import { phoneFromChatId } from "@/lib/utils";
-import type { DocumentStatus, Lead, Message, MessageType } from "@/lib/types";
+import type { DocumentRow, DocumentStatus, Lead, Message, MessageType } from "@/lib/types";
 import type { OcrResult } from "@/lib/ai/ocr";
 
 type Db = ReturnType<typeof createAdminClient>;
 
 const FOLIO_RE = /REG-[A-Z0-9]{6}/i;
+
+/** Documentos personales: si los manda, ya está haciendo el trámite (no solo pidiendo información). */
+const COMMITMENT_DOCS: string[] = [
+  "ine", "curp", "nss", "acta_nacimiento", "comprobante_domicilio", "estado_cuenta", "constancia_semanas",
+  "rfc", "talon_pago", "formato_autorizacion", "selfie_ine",
+];
 
 const EXT: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -295,6 +303,11 @@ export async function processMedia(messageId: string) {
           kind: "document",
           content: `Documento recibido (${ocr.tipo_documento}) → ${status}${issues.length ? `: ${issues.join("; ")}` : ""}`,
         });
+        if (ocr.tipo_documento === "ine") await pairIneSides(db, lead.id);
+        // Mandar sus documentos = ya se registró en el trámite (si solo tiene un producto en "pidió información")
+        if (status !== "invalido" && COMMITMENT_DOCS.includes(ocr.tipo_documento)) {
+          await promoteInterestedProduct(db, lead.id, `envió ${ocr.tipo_documento.replaceAll("_", " ")}`);
+        }
       }
     }
     delete meta.processing;
@@ -306,6 +319,34 @@ export async function processMedia(messageId: string) {
     await db.from("documents").update({ status: "error", issues: [(e as Error).message] }).eq("message_id", msg.id).eq("status", "procesando");
   }
   await db.from("messages").update({ meta }).eq("id", msg.id);
+}
+
+/**
+ * Frente y reverso de la INE en fotos separadas: cuando ya se tienen los dos lados, cada foto deja de
+ * decir "falta el otro lado" y, si no tiene otros problemas reales, queda como válida.
+ * No toca documentos que ya revisó un asesor ni los inválidos.
+ */
+async function pairIneSides(db: Db, leadId: string) {
+  const { data } = await db
+    .from("documents")
+    .select("id, status, issues, confidence, extracted, reviewed_at")
+    .eq("lead_id", leadId)
+    .eq("doc_type", "ine")
+    .neq("status", "invalido");
+  const docs = (data ?? []) as Pick<DocumentRow, "id" | "status" | "issues" | "confidence" | "extracted" | "reviewed_at">[];
+  const sides = new Set(docs.map((d) => d.extracted?.lado as string | undefined));
+  if (!sides.has("ambos") && !(sides.has("frente") && sides.has("reverso"))) return;
+
+  for (const d of docs) {
+    if (d.reviewed_at || !["frente", "reverso"].includes(d.extracted?.lado as string)) continue;
+    const issues = (d.issues ?? []).filter((i) => !isMissingSideIssue(i));
+    if (issues.length === (d.issues ?? []).length) continue; // ya estaba emparejado
+    const status: DocumentStatus = issues.some((i) => !isMinorIssue(i)) || (d.confidence ?? 1) < 0.7 ? "con_observaciones" : "valido";
+    const ocr = d.extracted as unknown as OcrResult;
+    const summary = `${ocrSummaryForAgent(ocr, status, issues)}\nINE completa: ya se recibieron el frente y el reverso (en fotos separadas).`;
+    await db.from("documents").update({ status, issues, extracted: { ...d.extracted, summary } }).eq("id", d.id);
+  }
+  await db.from("activities").insert({ lead_id: leadId, kind: "document", content: "INE completa: frente y reverso recibidos por separado" });
 }
 
 /** Busca otro comprobante con la misma clave de rastreo o folio. Devuelve el folio del prospecto que lo envió. */

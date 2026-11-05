@@ -130,7 +130,8 @@ const OCR_PROMPT = `Eres un verificador de documentos para trámites del IMSS en
 Analiza el documento adjunto y extrae sus datos con precisión, carácter por carácter.
 - Transcribe CURP, NSS, RFC y clave de elector exactamente como aparecen (mayúsculas, sin espacios).
 - Si un dato no aparece o no se puede leer, usa null. Nunca inventes datos.
-- Para INE/credencial, indica si la foto muestra el frente, el reverso o ambos, y la vigencia.
+- Para INE/credencial, indica si la foto muestra el frente, el reverso o ambos, y la vigencia. Es normal que la persona mande el frente y el reverso en fotos separadas: el sistema las junta solo. **No** anotes en observaciones que falta el otro lado, y "documento_completo" se refiere solo al lado que se ve (true si ese lado se ve completo y sus datos se leen).
+- En "observaciones", empieza con "Observación menor: " lo que no impide usar el documento (leve reflejo o brillo con datos legibles, borde ligeramente cortado sin perder datos, datos tomados de la zona MRZ, notas informativas como la vigencia). Sin ese prefijo deja solo los problemas reales que el asesor debe resolver.
 - Si es un comprobante de pago, transferencia (SPEI), depósito o ticket bancario: tipo_documento = "comprobante_pago", llena "pago" con monto, fecha, cuentas, clave de rastreo, concepto y ordenante, y deja nombre_completo, curp y nss en null. Revisa con cuidado señales de edición (tipografías distintas, cifras desalineadas, recortes).
 - Si es la foto de una persona (selfie o retrato, no un documento ni una INE): tipo_documento = "foto_persona", llena "foto" y deja los datos personales en null. es_documento_oficial = true si es una foto real de la persona (no captura de pantalla, foto de otra foto ni imagen de internet).
 - Si es un talón o recibo de pago de nómina, de pensión o de jubilación (por ejemplo el "Comprobante de percepciones y descuentos de nómina" de IMSS-Bienestar, que es un CFDI): tipo_documento = "talon_pago"; en nombre_completo el trabajador o pensionado, curp/nss/rfc tal como aparecen, y en otros_datos agrega, con estos nombres de campo exactos: "emisor" (quién paga, ej. IMSS-BIENESTAR), "numero_empleado", "regimen_contratacion" (ej. BASE, CONFIANZA), "puesto", "periodo", "fecha_pago" (YYYY-MM-DD) e "importe_neto" (solo número, ej. 9115.35). Agrega también la delegación o entidad si aparece.
@@ -177,12 +178,19 @@ export function evaluateDocument(
 ): { status: DocumentStatus; issues: string[] } {
   if (ocr.tipo_documento === "comprobante_pago") return evaluateReceipt(ocr, lead);
   if (ocr.tipo_documento === "foto_persona") return evaluatePhoto(ocr);
-  const issues = [...ocr.observaciones];
+  const isIne = ocr.tipo_documento === "ine";
+  // En la INE, que falte el otro lado no es un problema del documento: se junta con el otro lado al llegar (pairIneSides)
+  const issues = ocr.observaciones
+    .filter((o) => !(isIne && isMissingSideIssue(o)))
+    .map((o) => (isIne && !isMinorIssue(o) && looksMinor(o) ? `Observación menor: ${o}` : o));
 
   if (!ocr.legible) issues.push("El documento no es legible");
   if (!ocr.es_documento_oficial) issues.push("No parece un documento oficial");
   if (ocr.posible_alteracion) issues.push("Posible alteración del documento");
-  if (!ocr.documento_completo) issues.push("El documento aparece recortado o incompleto");
+  if (!ocr.documento_completo)
+    issues.push(isIne && ocr.legible ? "Observación menor: un borde de la credencial se ve cortado, pero los datos se leen" : "El documento aparece recortado o incompleto");
+  if (isIne && (ocr.lado === "frente" || ocr.lado === "reverso"))
+    issues.push(`Observación menor: falta recibir el ${ocr.lado === "frente" ? "reverso" : "frente"} de la INE`);
 
   if (ocr.curp && !isValidCurp(ocr.curp)) issues.push(`La CURP leída (${ocr.curp}) no tiene un formato válido`);
   if (ocr.nss && !isValidNss(ocr.nss)) issues.push(`El NSS leído (${ocr.nss}) no es válido (11 dígitos con verificador)`);
@@ -216,12 +224,21 @@ export function evaluateDocument(
   const status: DocumentStatus =
     !ocr.legible || !ocr.es_documento_oficial
       ? "invalido"
-      : issues.length > 0 || ocr.confianza < 0.7
+      : issues.some((i) => !isMinorIssue(i)) || ocr.confianza < 0.7
         ? "con_observaciones"
         : "valido";
 
   return { status, issues: [...new Set(issues)] };
 }
+
+/** "Solo se recibió el frente", "falta el reverso", "solicitar el reverso"… */
+const MISSING_SIDE_RE =
+  /(falta|faltan|s[oó]lo se|[uú]nicamente|solicitar|pedir|no se (envi|recib)|pendiente).{0,60}\b(frente|reverso|anverso|trasera|delantera|ambos lados)\b/i;
+export const isMissingSideIssue = (issue: string) => MISSING_SIDE_RE.test(issue);
+
+/** Notas que no impiden usar la INE: "leve reflejo, pero los datos son legibles", "credencial vigente", "datos de la zona MRZ". */
+const looksMinor = (o: string) =>
+  /(legibles?|se leen?\b|vigente|\bleve|ligeramente|zona mrz)/i.test(o) && !/(no se lee|ilegible|vencid|alterad|no coincide|falsa|apócrif)/i.test(o);
 
 function evaluateReceipt(
   ocr: OcrResult,
